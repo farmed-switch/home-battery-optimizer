@@ -15,9 +15,22 @@ class HomeBatteryOptimizerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
 
         data_schema = {
-            "nordpool_entity": selector.TextSelector(),
-            "battery_percentage": selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=100)
+            "nordpool_entity": selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    integration="nordpool",
+                    domain="sensor"
+                )
+            ),
+            "battery_entity": selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="sensor"
+                )
+            ),
+            "default_charge_rate": selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=100, step=1, unit_of_measurement="%/h")
+            ),
+            "default_discharge_rate": selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=100, step=1, unit_of_measurement="%/h")
             ),
         }
 
@@ -39,9 +52,22 @@ class HomeBatteryOptimizerOptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data=user_input)
 
         data_schema = {
-            "nordpool_entity": selector.TextSelector(),
-            "battery_percentage": selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=100)
+            "nordpool_entity": selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    integration="nordpool",
+                    domain="sensor"
+                )
+            ),
+            "battery_entity": selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="sensor"
+                )
+            ),
+            "default_charge_rate": selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=100, step=1, unit_of_measurement="%/h")
+            ),
+            "default_discharge_rate": selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=100, step=1, unit_of_measurement="%/h")
             ),
         }
 
