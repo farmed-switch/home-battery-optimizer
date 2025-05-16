@@ -1,0 +1,35 @@
+services:
+  start_charging:
+    description: "Start charging the battery."
+    fields:
+      entity_id:
+        description: "The entity ID of the battery optimizer."
+        example: "switch.battery_optimizer"
+
+  stop_charging:
+    description: "Stop charging the battery."
+    fields:
+      entity_id:
+        description: "The entity ID of the battery optimizer."
+        example: "switch.battery_optimizer"
+
+  start_discharging:
+    description: "Start discharging the battery."
+    fields:
+      entity_id:
+        description: "The entity ID of the battery optimizer."
+        example: "switch.battery_optimizer"
+
+  stop_discharging:
+    description: "Stop discharging the battery."
+    fields:
+      entity_id:
+        description: "The entity ID of the battery optimizer."
+        example: "switch.battery_optimizer"
+
+  get_schedule:
+    description: "Retrieve the planned charging and discharging schedule."
+    fields:
+      entity_id:
+        description: "The entity ID of the battery optimizer."
+        example: "sensor.battery_optimizer_schedule"

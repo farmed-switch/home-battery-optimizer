@@ -1,0 +1,8 @@
+{
+  "battery_percentage": 50,
+  "charging": false,
+  "discharging": false,
+  "next_charge_time": null,
+  "next_discharge_time": null,
+  "schedule": []
+}

@@ -1,0 +1,26 @@
+{
+  "title": "Home Battery Optimizer",
+  "description": "Integration for managing home battery charging and discharging based on electricity prices.",
+  "start": "Start Charging",
+  "stop": "Stop Charging",
+  "discharge": "Start Discharging",
+  "stop_discharge": "Stop Discharging",
+  "battery_percentage": "Battery Percentage",
+  "nordpool_entity": "Nordpool Integration Entity",
+  "schedule": "Planned Schedule",
+  "charging": {
+    "title": "Charging Status",
+    "active": "Charging",
+    "inactive": "Not Charging"
+  },
+  "discharging": {
+    "title": "Discharging Status",
+    "active": "Discharging",
+    "inactive": "Not Discharging"
+  },
+  "errors": {
+    "invalid_entity": "Invalid Nordpool entity provided.",
+    "battery_full": "Battery is already full.",
+    "battery_empty": "Battery is already empty."
+  }
+}
