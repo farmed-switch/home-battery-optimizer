@@ -1,5 +1,6 @@
+import requests
+
 def fetch_price_data(api_url):
-    import requests
     response = requests.get(api_url)
     if response.status_code == 200:
         return response.json()
@@ -8,7 +9,8 @@ def fetch_price_data(api_url):
 
 def parse_price_data(price_data):
     parsed_data = {}
-    for entry in price_data:
+    # Anpassa till din JSON-struktur
+    for entry in price_data.get("hourly_prices", []):
         hour = entry['hour']
         price = entry['price']
         parsed_data[hour] = price

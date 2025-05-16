@@ -11,7 +11,10 @@ def time_difference(start_time, end_time):
     return (end_time - start_time).total_seconds() / 3600
 
 def is_time_in_range(start_time, end_time, check_time):
-    return start_time <= check_time <= end_time
-
+    if start_time <= end_time:
+        return start_time <= check_time <= end_time
+    else:
+        return check_time >= start_time or check_time <= end_time
+    
 def get_schedule_hours(start_hour, duration):
     return [start_hour + timedelta(hours=i) for i in range(duration)]

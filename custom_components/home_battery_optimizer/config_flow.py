@@ -1,3 +1,4 @@
+import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers import selector
@@ -24,27 +25,16 @@ class HomeBatteryOptimizerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 },
             )
 
+        data_schema = vol.Schema({
+            vol.Required("nordpool_entity"): selector.TextSelector(),
+            vol.Required("battery_percentage"): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=100)
+            ),
+        })
+
         return self.async_show_form(
             step_id="user",
-            data_schema=selector.SelectSelector(
-                selector={
-                    "type": "object",
-                    "properties": {
-                        "nordpool_entity": {
-                            "type": "string",
-                            "required": True,
-                            "description": "Nordpool integration entity",
-                        },
-                        "battery_percentage": {
-                            "type": "number",
-                            "required": True,
-                            "minimum": 0,
-                            "maximum": 100,
-                            "description": "Battery percentage (0-100)",
-                        },
-                    },
-                }
-            ),
+            data_schema=data_schema,
         )
 
     @callback
@@ -59,25 +49,14 @@ class HomeBatteryOptimizerOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
+        data_schema = vol.Schema({
+            vol.Required("nordpool_entity"): selector.TextSelector(),
+            vol.Required("battery_percentage"): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=100)
+            ),
+        })
+
         return self.async_show_form(
             step_id="init",
-            data_schema=selector.SelectSelector(
-                selector={
-                    "type": "object",
-                    "properties": {
-                        "nordpool_entity": {
-                            "type": "string",
-                            "required": True,
-                            "description": "Nordpool integration entity",
-                        },
-                        "battery_percentage": {
-                            "type": "number",
-                            "required": True,
-                            "minimum": 0,
-                            "maximum": 100,
-                            "description": "Battery percentage (0-100)",
-                        },
-                    },
-                }
-            ),
+            data_schema=data_schema,
         )

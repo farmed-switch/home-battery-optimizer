@@ -13,16 +13,16 @@ class BatteryStatusSensor(Entity):
 
     @property
     def state(self):
-        return self._battery_data.get('percentage', STATE_UNKNOWN)
-
+        return self._battery_data.get('battery_percentage', STATE_UNKNOWN)
+    
     @property
     def extra_state_attributes(self):
         return {
-            'status': self._battery_data.get('status', STATE_UNKNOWN),
             'charging': self._battery_data.get('charging', False),
             'discharging': self._battery_data.get('discharging', False),
             'next_charge_time': self._battery_data.get('next_charge_time', STATE_UNKNOWN),
             'next_discharge_time': self._battery_data.get('next_discharge_time', STATE_UNKNOWN),
+            'schedule': self._battery_data.get('schedule', []),
         }
 
     @property

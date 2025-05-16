@@ -1,16 +1,19 @@
 import json
 import time
-from battery_optimizer import BatteryOptimizer
-from price_analysis import PriceAnalysis
+import os
+from .battery_optimizer import BatteryOptimizer
+from .price_analysis import PriceAnalysis
 
 def load_battery_status():
-    with open('../data/battery_status.json', 'r') as file:
+    path = os.path.join(os.path.dirname(__file__), '..', 'data', 'battery_status.json')
+    with open(os.path.abspath(path), 'r') as file:
         return json.load(file)
 
 def load_price_data():
-    with open('../data/price_data.json', 'r') as file:
+    path = os.path.join(os.path.dirname(__file__), '..', 'data', 'price_data.json')
+    with open(os.path.abspath(path), 'r') as file:
         return json.load(file)
-
+    
 def main():
     battery_status = load_battery_status()
     price_data = load_price_data()
