@@ -1,17 +1,23 @@
-from homeassistant.helpers.entity import Entity
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.core import HomeAssistant
 from . import DOMAIN
+from .battery_optimizer import BatteryOptimizer
 
-class BatteryOptimizerSwitch(SwitchEntity):
-    def __init__(self, name, battery_optimizer):
+class BatteryChargingSwitch(SwitchEntity):
+    def __init__(self, hass, name, config):
+        self.hass = hass
         self._name = name
-        self._battery_optimizer = battery_optimizer
+        self._config = config
         self._is_on = False
+        self._optimizer = BatteryOptimizer(
+            battery_capacity=100,
+            charge_rate=config.get("default_charge_rate", 10),
+            discharge_rate=config.get("default_discharge_rate", 10),
+            price_analysis=None
+        )
 
     @property
     def name(self):
-        return self._name
+        return f"{self._name} Charging"
 
     @property
     def is_on(self):
@@ -19,22 +25,50 @@ class BatteryOptimizerSwitch(SwitchEntity):
 
     async def async_turn_on(self, **kwargs):
         self._is_on = True
-        await self._battery_optimizer.start_charging()
+        self._optimizer.charge_battery(1)  # Starta laddning (exempel: 1 timme)
 
     async def async_turn_off(self, **kwargs):
         self._is_on = False
-        await self._battery_optimizer.stop_charging()
+        # Här kan du lägga till logik för att stoppa laddning om det behövs
 
     async def async_update(self):
-        # Update the switch state based on the battery optimizer's status
-        self._is_on = self._battery_optimizer.is_charging()
+        pass
 
-async def async_setup_entry(hass: HomeAssistant, entry, async_add_entities):
-    battery_optimizer = hass.data[DOMAIN][entry.entry_id]
-    
-    switches = [
-        BatteryOptimizerSwitch("Start Charging", battery_optimizer),
-        BatteryOptimizerSwitch("Stop Charging", battery_optimizer),
-    ]
-    
-    async_add_entities(switches)
+class BatteryDischargingSwitch(SwitchEntity):
+    def __init__(self, hass, name, config):
+        self.hass = hass
+        self._name = name
+        self._config = config
+        self._is_on = False
+        self._optimizer = BatteryOptimizer(
+            battery_capacity=100,
+            charge_rate=config.get("default_charge_rate", 10),
+            discharge_rate=config.get("default_discharge_rate", 10),
+            price_analysis=None
+        )
+
+    @property
+    def name(self):
+        return f"{self._name} Discharging"
+
+    @property
+    def is_on(self):
+        return self._is_on
+
+    async def async_turn_on(self, **kwargs):
+        self._is_on = True
+        self._optimizer.discharge_battery(1)  # Starta urladdning (exempel: 1 timme)
+
+    async def async_turn_off(self, **kwargs):
+        self._is_on = False
+        # Här kan du lägga till logik för att stoppa urladdning om det behövs
+
+    async def async_update(self):
+        pass
+
+async def async_setup_entry(hass, entry, async_add_entities):
+    config = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities([
+        BatteryChargingSwitch(hass, "Battery", config),
+        BatteryDischargingSwitch(hass, "Battery", config)
+    ])

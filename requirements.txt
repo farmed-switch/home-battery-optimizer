@@ -1,6 +1,0 @@
-homeassistant
-requests
-pytz
-aiohttp
-async_timeout
-python-nordpool

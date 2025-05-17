@@ -1,6 +1,7 @@
 import voluptuous as vol
 from homeassistant import config_entries
-import homeassistant.helpers.config_validation as cv
+from homeassistant.core import callback
+import homeassistant.helpers.config_validation as cv  # <-- Lägg till denna rad!
 
 from .const import DOMAIN
 
