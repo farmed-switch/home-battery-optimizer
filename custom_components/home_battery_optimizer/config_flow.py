@@ -1,6 +1,6 @@
+import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.core import callback
-from homeassistant.helpers import selector
+import homeassistant.helpers.config_validation as cv
 
 from .const import DOMAIN
 
@@ -14,25 +14,12 @@ class HomeBatteryOptimizerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 data=user_input,
             )
 
-        data_schema = {
-            "nordpool_entity": selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    integration="nordpool",
-                    domain="sensor"
-                )
-            ),
-            "battery_entity": selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain="sensor"
-                )
-            ),
-            "default_charge_rate": selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=100, step=1, unit_of_measurement="%/h")
-            ),
-            "default_discharge_rate": selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=100, step=1, unit_of_measurement="%/h")
-            ),
-        }
+        data_schema = vol.Schema({
+            vol.Required("nordpool_entity"): cv.string,  # Ange entity_id som text
+            vol.Required("battery_entity"): cv.string,   # Ange entity_id som text
+            vol.Required("default_charge_rate", default=10): cv.positive_int,
+            vol.Required("default_discharge_rate", default=10): cv.positive_int,
+        })
 
         return self.async_show_form(
             step_id="user",
@@ -51,25 +38,12 @@ class HomeBatteryOptimizerOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        data_schema = {
-            "nordpool_entity": selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    integration="nordpool",
-                    domain="sensor"
-                )
-            ),
-            "battery_entity": selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain="sensor"
-                )
-            ),
-            "default_charge_rate": selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=100, step=1, unit_of_measurement="%/h")
-            ),
-            "default_discharge_rate": selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=100, step=1, unit_of_measurement="%/h")
-            ),
-        }
+        data_schema = vol.Schema({
+            vol.Required("nordpool_entity"): cv.string,
+            vol.Required("battery_entity"): cv.string,
+            vol.Required("default_charge_rate", default=10): cv.positive_int,
+            vol.Required("default_discharge_rate", default=10): cv.positive_int,
+        })
 
         return self.async_show_form(
             step_id="init",
