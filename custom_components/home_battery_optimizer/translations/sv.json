@@ -1,0 +1,50 @@
+{
+  "title": "Batterioptimerare",
+  "description": "Integration för att optimera laddning och urladdning av hem-batteri baserat på elpris.",
+  "start": "Starta laddning",
+  "stop": "Stoppa laddning",
+  "discharge": "Starta urladdning",
+  "stop_discharge": "Stoppa urladdning",
+  "battery_percentage": "Batterinivå",
+  "nordpool_entity": "Nordpool-entity",
+  "schedule": "Planerat schema",
+  "minimum_profit": "Minsta vinst",
+  "minimum_profit_desc": "Minsta vinst (i din valuta/enhet) som krävs för att tillåta laddning/urladdning.",
+  "charge_percentage": "Laddningsprocent",
+  "charge_percentage_desc": "Maximal laddningsnivå (SoC) i procent (t.ex. 100%).",
+  "discharge_percentage": "Urladdningsprocent",
+  "discharge_percentage_desc": "Lägsta urladdningsnivå (SoC) i procent (t.ex. 0%).",
+  "charge_rate": "Laddningshastighet",
+  "charge_rate_desc": "Hur många procent per timme batteriet kan laddas.",
+  "discharge_rate": "Urladdningshastighet",
+  "discharge_rate_desc": "Hur många procent per timme batteriet kan urladdas.",
+  "charging": {
+    "title": "Laddningsstatus",
+    "active": "Laddar",
+    "inactive": "Laddar ej"
+  },
+  "discharging": {
+    "title": "Urladdningsstatus",
+    "active": "Urladdar",
+    "inactive": "Urladdar ej"
+  },
+  "services": {
+    "force_update_schedule": {
+      "name": "Tvinga uppdatering av schema",
+      "description": "Uppdaterar omedelbart ladd-/urladdningsschemat."
+    },
+    "force_charge": {
+      "name": "Tvinga laddning",
+      "description": "Startar laddning oavsett schema."
+    },
+    "force_discharge": {
+      "name": "Tvinga urladdning",
+      "description": "Startar urladdning oavsett schema."
+    }
+  },
+  "errors": {
+    "invalid_entity": "Ogiltig Nordpool-entity.",
+    "battery_full": "Batteriet är redan fullt.",
+    "battery_empty": "Batteriet är redan tomt."
+  }
+}

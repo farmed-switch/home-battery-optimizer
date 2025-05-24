@@ -1,6 +1,6 @@
 {
   "title": "Home Battery Optimizer",
-  "description": "Integration for managing home battery charging and discharging based on electricity prices.",
+  "description": "Advanced Home Assistant integration for battery optimization, self-sufficiency, and visualization. Features robust schedule/status sensors, persistent number/switch entities, dynamic units, ApexCharts support, and custom icon.",
   "start": "Start Charging",
   "stop": "Stop Charging",
   "discharge": "Start Discharging",
