@@ -46,5 +46,15 @@
     "invalid_entity": "Invalid Nordpool entity provided.",
     "battery_full": "Battery is already full.",
     "battery_empty": "Battery is already empty."
-  }
+  },
+  "sensor.soc": "Battery SoC",
+  "sensor.estimated_soc": "Estimated SoC",
+  "sensor.power": "Battery Power",
+  "sensor.target_soc": "Target SoC",
+  "sensor.status": "Battery Status",
+  "sensor.schedule": "Battery Schedule",
+  "sensor.price_raw": "Battery Price (raw_two_days)",
+  "sensor.window_raw": "Battery Window (raw_two_days)",
+  "sensor.charge_raw": "Battery Charge (raw_two_days)",
+  "sensor.discharge_raw": "Battery Discharge (raw_two_days)"
 }
