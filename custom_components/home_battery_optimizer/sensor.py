@@ -4,7 +4,7 @@ from .const import DOMAIN
 from homeassistant.helpers.entity import EntityDescription
 from .entity import HBOEntity
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -13,7 +13,6 @@ SENSOR_DESCRIPTIONS = [
     EntityDescription(key="soc", name="Batteri SoC"),
     EntityDescription(key="estimated_soc", name="Estimated SoC"),
     EntityDescription(key="power", name="Batteri Effekt"),
-    EntityDescription(key="target_soc", name="Mål SoC"),
     EntityDescription(key="status", name="Batteristatus"),
     EntityDescription(key="schedule", name="Battery Schedule"),
     EntityDescription(key="price_raw", name="Battery Price (raw_two_days)"),
@@ -49,23 +48,125 @@ class BatteryOptimizerSensor(HBOEntity, SensorEntity):
         if key == "soc":
             return self.coordinator.soc
         if key == "estimated_soc":
-            # Returnera None eller logik för uppskattad SoC per timme
-            return None
+            now = datetime.now()
+            next_charge_time = None
+            next_discharge_time = None
+            for n in range(1, 5):
+                charge_raw = getattr(self.coordinator, f"charge_raw_window{n}", None) or []
+                for entry in charge_raw:
+                    end_val = entry.get("end")
+                    if not end_val:
+                        continue
+                    try:
+                        end_dt = datetime.fromisoformat(end_val)
+                    except Exception:
+                        continue
+                    if end_dt > now and entry.get("charge", 0) == 1:
+                        next_charge_time = end_dt
+                        break
+                if next_charge_time:
+                    break
+            for n in range(1, 5):
+                discharge_raw = getattr(self.coordinator, f"discharge_raw_window{n}", None) or []
+                for entry in discharge_raw:
+                    end_val = entry.get("end")
+                    if not end_val:
+                        continue
+                    try:
+                        end_dt = datetime.fromisoformat(end_val)
+                    except Exception:
+                        continue
+                    if end_dt > now and entry.get("discharge", 0) == 1:
+                        next_discharge_time = end_dt
+                        break
+                if next_discharge_time:
+                    break
+            if next_charge_time and (not next_discharge_time or next_charge_time <= next_discharge_time):
+                return f"Waiting Charge {next_charge_time.strftime('%H.%M')}"
+            elif next_discharge_time:
+                return f"Waiting Discharge {next_discharge_time.strftime('%H.%M')}"
+            else:
+                return "No upcoming charge/discharge"
+        if key == "charge_raw":
+            now = datetime.now()
+            next_charge_times = []
+            for n in range(1, 5):
+                charge_raw = getattr(self.coordinator, f"charge_raw_window{n}", None) or []
+                for entry in charge_raw:
+                    end_val = entry.get("end")
+                    if not end_val:
+                        continue
+                    try:
+                        end_dt = datetime.fromisoformat(end_val)
+                    except Exception:
+                        continue
+                    if end_dt > now and entry.get("charge", 0) == 1:
+                        next_charge_times.append(end_dt)
+            if next_charge_times:
+                next_charge_time = min(next_charge_times)
+                if next_charge_time.date() == now.date():
+                    return f"Today Charge {next_charge_time.strftime('%H.%M')}"
+                else:
+                    return f"Tomorrow Charge {next_charge_time.strftime('%H.%M')}"
+            else:
+                return "No upcoming charge"
+        if key == "discharge_raw":
+            now = datetime.now()
+            next_discharge_times = []
+            for n in range(1, 5):
+                discharge_raw = getattr(self.coordinator, f"discharge_raw_window{n}", None) or []
+                for entry in discharge_raw:
+                    end_val = entry.get("end")
+                    if not end_val:
+                        continue
+                    try:
+                        end_dt = datetime.fromisoformat(end_val)
+                    except Exception:
+                        continue
+                    if end_dt > now and entry.get("discharge", 0) == 1:
+                        next_discharge_times.append(end_dt)
+            if next_discharge_times:
+                next_discharge_time = min(next_discharge_times)
+                if next_discharge_time.date() == now.date():
+                    return f"Today Discharge {next_discharge_time.strftime('%H.%M')}"
+                else:
+                    return f"Tomorrow Discharge {next_discharge_time.strftime('%H.%M')}"
+            else:
+                return "No upcoming discharge"
         if key == "power":
             return getattr(self.coordinator, "current_power", None)
-        if key == "target_soc":
-            return getattr(self.coordinator, "target_soc", None)
         if key == "status":
-            return getattr(self.coordinator, "status", None)
+            # Prioritera Self Usage om aktiv
+            if getattr(self.coordinator, "self_usage_on", False):
+                return "Self Usage"
+            schedule = self.coordinator.schedule or []
+            now = self.coordinator.hass.now() if hasattr(self.coordinator.hass, 'now') else datetime.now()
+            for entry in schedule:
+                start_dt = entry.get("start")
+                end_dt = entry.get("end")
+                if start_dt and end_dt:
+                    try:
+                        start_dt = datetime.fromisoformat(start_dt)
+                        end_dt = datetime.fromisoformat(end_dt)
+                        if start_dt <= now < end_dt:
+                            action = entry.get("action", "idle")
+                            if action == "charge":
+                                return "Charge"
+                            elif action == "discharge":
+                                return "Discharge"
+                            else:
+                                return "Idle"
+                    except Exception:
+                        continue
+            return "Idle"
         if key == "schedule":
             schedule = self.coordinator.schedule or []
-            now = self.coordinator.hass.now() if hasattr(self.coordinator.hass, 'now') else None
+            now = self.coordinator.hass.now() if hasattr(self.coordinator.hass, 'now') else datetime.now()
             for entry in schedule:
                 start_dt = entry.get("start")
                 end_dt = entry.get("end")
                 if start_dt and end_dt and now:
                     try:
-                        from datetime import datetime
                         start_dt = datetime.fromisoformat(start_dt)
                         end_dt = datetime.fromisoformat(end_dt)
                         if start_dt <= now < end_dt:
@@ -73,7 +174,39 @@ class BatteryOptimizerSensor(HBOEntity, SensorEntity):
                     except Exception:
                         continue
             return "idle"
-        return None
+        if key == "price_raw":
+            # Visa aktuellt pris (value) för nuvarande tid, annars "Unknown"
+            price_data = self.coordinator.price_data or []
+            now = self.coordinator.hass.now() if hasattr(self.coordinator.hass, 'now') else datetime.now()
+            for entry in price_data:
+                start = entry.get("start")
+                end = entry.get("end")
+                if start and end:
+                    try:
+                        start_dt = datetime.fromisoformat(start)
+                        end_dt = datetime.fromisoformat(end)
+                        if start_dt <= now < end_dt:
+                            return entry.get("value")
+                    except Exception:
+                        continue
+            return "Unknown"
+        if key == "window_raw":
+            schedule = self.coordinator.schedule or []
+            now = self.coordinator.hass.now() if hasattr(self.coordinator.hass, 'now') else datetime.now()
+            for entry in schedule:
+                start_dt = entry.get("start")
+                end_dt = entry.get("end")
+                window = entry.get("window")
+                if start_dt and end_dt and window is not None:
+                    try:
+                        start_dt = datetime.fromisoformat(start_dt)
+                        end_dt = datetime.fromisoformat(end_dt)
+                        if start_dt <= now < end_dt:
+                            return window
+                    except Exception:
+                        continue
+            return None
+        return ""
 
     @property
     def extra_state_attributes(self):
@@ -82,8 +215,6 @@ class BatteryOptimizerSensor(HBOEntity, SensorEntity):
             return {"unit_of_measurement": "%", "source": self.coordinator.config.get("battery_entity")}
         if key == "power":
             return {"unit_of_measurement": "W", "source": self.coordinator.config.get("battery_power_entity")}
-        if key == "target_soc":
-            return {"unit_of_measurement": "%", "source": self.coordinator.config.get("target_soc_entity")}
         if key == "status":
             return {"charging_on": self.coordinator.charging_on, "discharging_on": self.coordinator.discharging_on}
         if key == "schedule":
@@ -130,7 +261,6 @@ class BatteryOptimizerSensor(HBOEntity, SensorEntity):
                 ]
             }
         elif key == "charge_raw":
-            # Visa window 1-4 om de finns
             result = []
             for n in range(1, 5):
                 charge_raw = getattr(self.coordinator, f"charge_raw_window{n}", None)
@@ -139,7 +269,6 @@ class BatteryOptimizerSensor(HBOEntity, SensorEntity):
                     result.append({"window": n, "raw_two_days": charge_raw, "avg_charge_price": avg_price})
             if result:
                 return {"windows": result}
-            # Fallback: visa gamla schedule om det finns
             schedule = self.coordinator.schedule or []
             if not schedule:
                 price_data = self.coordinator.price_data or []
@@ -164,7 +293,6 @@ class BatteryOptimizerSensor(HBOEntity, SensorEntity):
                 ]
             }
         elif key == "discharge_raw":
-            # Visa discharge_raw för window 1-4 om de finns
             result = []
             for n in range(1, 5):
                 discharge_raw = getattr(self.coordinator, f"discharge_raw_window{n}", None)
