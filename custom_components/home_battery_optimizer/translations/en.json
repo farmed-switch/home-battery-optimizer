@@ -1,0 +1,50 @@
+{
+  "title": "Home Battery Optimizer",
+  "description": "Integration for managing home battery charging and discharging based on electricity prices.",
+  "start": "Start Charging",
+  "stop": "Stop Charging",
+  "discharge": "Start Discharging",
+  "stop_discharge": "Stop Discharging",
+  "battery_percentage": "Battery Percentage",
+  "nordpool_entity": "Nordpool Integration Entity",
+  "schedule": "Planned Schedule",
+  "minimum_profit": "Minimum Profit",
+  "minimum_profit_desc": "The minimum profit required (in your currency/unit) to allow charging or discharging.",
+  "charge_percentage": "Charge Percentage",
+  "charge_percentage_desc": "The maximum battery state of charge (SoC) percentage to charge up to (e.g. 100%).",
+  "discharge_percentage": "Discharge Percentage",
+  "discharge_percentage_desc": "The minimum battery state of charge (SoC) percentage to discharge down to (e.g. 0%).",
+  "charge_rate": "Charge Rate",
+  "charge_rate_desc": "How many percent per hour the battery can be charged.",
+  "discharge_rate": "Discharge Rate",
+  "discharge_rate_desc": "How many percent per hour the battery can be discharged.",
+  "charging": {
+    "title": "Charging Status",
+    "active": "Charging",
+    "inactive": "Not Charging"
+  },
+  "discharging": {
+    "title": "Discharging Status",
+    "active": "Discharging",
+    "inactive": "Not Discharging"
+  },
+  "services": {
+    "force_update_schedule": {
+      "name": "Force Update Schedule",
+      "description": "Immediately updates the battery charge/discharge schedule."
+    },
+    "force_charge": {
+      "name": "Force Charge",
+      "description": "Immediately turns on the charging switch, regardless of schedule."
+    },
+    "force_discharge": {
+      "name": "Force Discharge",
+      "description": "Immediately turns on the discharging switch, regardless of schedule."
+    }
+  },
+  "errors": {
+    "invalid_entity": "Invalid Nordpool entity provided.",
+    "battery_full": "Battery is already full.",
+    "battery_empty": "Battery is already empty."
+  }
+}

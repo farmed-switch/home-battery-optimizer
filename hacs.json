@@ -1,0 +1,8 @@
+{
+  "name": "Home Battery Optimizer",
+  "content_in_root": false,
+  "domains": ["sensor", "switch"],
+  "country": "SE",
+  "homeassistant": "2021.12.0",
+  "render_readme": true
+}

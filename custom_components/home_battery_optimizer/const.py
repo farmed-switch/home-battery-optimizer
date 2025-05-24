@@ -1,0 +1,1 @@
+DOMAIN = "home_battery_optimizer"

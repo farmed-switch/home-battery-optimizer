@@ -1,0 +1,15 @@
+{
+  "domain": "home_battery_optimizer",
+  "name": "Home Battery Optimizer",
+  "version": "2.0.0",
+  "config_flow": true,
+  "documentation": "https://github.com/farmed-switch/home-battery-optimizer#readme",
+  "requirements": [],
+  "dependencies": [],
+  "codeowners": ["@farmed-switch"],
+  "iot_class": "local_polling",
+  "homeassistant": "2021.12.0",
+  "repository": "https://github.com/farmed-switch/home-battery-optimizer",
+  "platforms": ["sensor", "switch", "number", "button"],
+  "description": "Advanced Home Assistant integration for battery optimization, self-sufficiency, and visualization. Features robust schedule/status sensors, persistent number/switch entities, dynamic units, ApexCharts support, and custom icon."
+}
