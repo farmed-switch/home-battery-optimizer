@@ -100,14 +100,23 @@ class BatteryOptimizerSensor(HBOEntity, SensorEntity):
         schedule = coordinator.schedule or []
         data = []
         for entry in schedule:
+            # Sätt charge=1 om SoC ökar denna timme jämfört med förra
+            prev_soc = None
+            if data:
+                prev_soc = data[-1]["soc"]
+            else:
+                prev_soc = entry.get("soc")
+            curr_soc = entry.get("soc")
+            charge = 1 if prev_soc is not None and curr_soc is not None and curr_soc > prev_soc else 0
+            discharge = 1 if prev_soc is not None and curr_soc is not None and curr_soc < prev_soc else 0
             data.append({
                 "start": entry.get("start"),
                 "end": entry.get("end"),
                 "action": entry.get("action"),
                 "price": entry.get("price"),
-                "soc": entry.get("soc"),
-                "charge": 1 if entry.get("action") == "charge" else 0,
-                "discharge": 1 if entry.get("action") == "discharge" else 0,
+                "soc": curr_soc,
+                "charge": charge,
+                "discharge": discharge,
                 "window": entry.get("window")
             })
         return {

@@ -601,12 +601,10 @@ class HomeBatteryOptimizerCoordinator:
                 prev_discharge = getattr(self, f"estimated_soc_discharge_window{n-1}", None)
                 prev_discharge_soc = None
                 if prev_discharge and len(prev_discharge) > 0:
-                    # Use the last SoC in the discharge window (should be after all discharge hours)
                     prev_discharge_soc = prev_discharge[-1]["soc"]
                 if prev_discharge_soc is not None:
                     prev_soc = prev_discharge_soc
                 else:
-                    # Fallback: use last SoC from previous charge window
                     prev_charge = getattr(self, f"estimated_soc_window{n-1}", None)
                     if prev_charge and len(prev_charge) > 0:
                         prev_soc = prev_charge[-1]["soc"]
@@ -616,9 +614,7 @@ class HomeBatteryOptimizerCoordinator:
             charge_rate = self.charge_rate
             soc_needed = max(0, max_soc - prev_soc)
             hours_needed = int((soc_needed + charge_rate - 1) // charge_rate)
-            if soc_needed < 5:
-                hours_needed = 0
-            # Endast tillåt timmar i detta window som INTE är i tidigare windows
+            # Ingen deadband!
             window_idxs = [i for i in range(start_idx, end_idx+1) if i not in used_idxs]
             window_prices = [(i, float(self.price_data[i]["value"])) for i in window_idxs]
             sorted_hours = sorted(window_prices, key=lambda x: x[1])
@@ -627,16 +623,11 @@ class HomeBatteryOptimizerCoordinator:
             estimated_soc = []
             current_soc = prev_soc
             now = datetime.now()
-            # For average charge price calculation
             charge_prices = []
             for i in range(len(self.price_data)):
                 entry = self.price_data[i]
                 in_window = i in window_idxs
-                # end_dt = datetime.fromisoformat(entry["end"])
-                # is_future = end_dt > now
                 charge = 1 if i in charge_idxs and in_window else 0
-                if current_soc >= max_soc - 5:
-                    charge = 0
                 if charge:
                     current_soc = min(current_soc + charge_rate, max_soc)
                     if in_window:
@@ -653,10 +644,8 @@ class HomeBatteryOptimizerCoordinator:
                 })
             setattr(self, f"charge_raw_window{n}", charge_raw)
             setattr(self, f"estimated_soc_window{n}", estimated_soc)
-            # Calculate and store average charge price for this window
             avg_price = sum(charge_prices) / len(charge_prices) if charge_prices else None
             setattr(self, f"avg_charge_price_window{n}", avg_price)
-            # För nästa window: utgå från sista SoC i estimated_soc (om ingen discharge)
             for entry in reversed(estimated_soc):
                 end_dt = datetime.fromisoformat(entry["end"])
                 if end_dt <= now:
@@ -690,7 +679,7 @@ class HomeBatteryOptimizerCoordinator:
             return []
         now = datetime.now()
         min_profit = getattr(self, "min_profit", 10)
-        deadband = 5  # Always keep at least this much above min_battery_soc
+        # Ingen deadband!
         num_windows = len(self.charge_windows)
         for n in range(1, num_windows + 1):
             prev_charge = getattr(self, f"estimated_soc_window{n}", None)
@@ -710,10 +699,7 @@ class HomeBatteryOptimizerCoordinator:
                 avg_charge_price = 0
             min_soc = self.min_battery_soc
             discharge_rate = self.discharge_rate
-            # Always use SoC at candidate start time
             soc = self.get_soc_for_index(prev_charge, start_discharge_idx-1) or self.soc or 0
-            # Deadband: urladdning får bara starta om soc > min_soc + deadband
-            soc_limit_start = min_soc + deadband
             soc_limit_stop = min_soc
             soc_needed = max(soc - soc_limit_stop, 0)
             hours_possible = int((soc_needed + discharge_rate - 1) // discharge_rate)
@@ -726,9 +712,7 @@ class HomeBatteryOptimizerCoordinator:
                 start_price = float(self.price_data[start_discharge_idx]["value"])
                 max_price_idx = max(discharge_idxs, key=lambda i: float(self.price_data[i]["value"]))
                 if float(self.price_data[max_price_idx]["value"]) > start_price and max_price_idx != start_discharge_idx:
-                    # Flytta start till max_price_idx och kör om logiken
                     start_discharge_idx = max_price_idx
-                    # Recalculate SoC at new candidate start
                     soc = self.get_soc_for_index(prev_charge, start_discharge_idx-1) or self.soc or 0
                     soc_needed = max(soc - soc_limit_stop, 0)
                     hours_possible = int((soc_needed + discharge_rate - 1) // discharge_rate)
@@ -737,12 +721,10 @@ class HomeBatteryOptimizerCoordinator:
                     price_candidates.sort(key=lambda x: x[1], reverse=True)
                     discharge_candidates = [i for i, price in price_candidates if price >= avg_charge_price + min_profit]
                     discharge_idxs = sorted(discharge_candidates[:hours_possible])
-            # Om ingen timme uppfyller min_profit, ingen urladdning
             if not discharge_idxs:
                 setattr(self, f"discharge_raw_window{n}", None)
                 setattr(self, f"estimated_soc_discharge_window{n}", None)
                 continue
-            # Bygg discharge_raw och estimated_soc
             discharge_raw = []
             estimated_soc = []
             current_soc = soc
@@ -752,10 +734,9 @@ class HomeBatteryOptimizerCoordinator:
                 in_window = i in discharge_idxs
                 end_dt = datetime.fromisoformat(entry["end"])
                 is_future = end_dt > now
-                # Deadband: tillåt start av urladdning endast om current_soc > soc_limit_start
-                if not discharge_active and in_window and is_future and current_soc > soc_limit_start:
+                # Ingen deadband!
+                if not discharge_active and in_window and is_future:
                     discharge_active = True
-                # När urladdning är aktiv, fortsätt tills current_soc <= soc_limit_stop
                 discharge = 1 if discharge_active and in_window and is_future and current_soc > soc_limit_stop else 0
                 if discharge:
                     current_soc = max(current_soc - discharge_rate, soc_limit_stop)
@@ -771,7 +752,6 @@ class HomeBatteryOptimizerCoordinator:
                 })
             setattr(self, f"discharge_raw_window{n}", discharge_raw)
             setattr(self, f"estimated_soc_discharge_window{n}", estimated_soc)
-            # Begränsa charge window så att charge=0 från och med första discharge-timmen
             charge_raw = getattr(self, f"charge_raw_window{n}", None)
             if charge_raw:
                 discharge_start_idx = discharge_idxs[0] if discharge_idxs else None
