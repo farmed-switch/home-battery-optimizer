@@ -46,5 +46,9 @@
     "invalid_entity": "Ogiltig Nordpool-entity.",
     "battery_full": "Batteriet är redan fullt.",
     "battery_empty": "Batteriet är redan tomt."
-  }
+  },
+  "battery_entity": "bBattery_entity (0-100%)",
+  "solar_entity": "Inverter_input_entity (Solar W)",
+  "consumption_entity": "House_consumption_power_entity",
+  "battery_power_entity": "Battery_charge_discharge_power"
 }
