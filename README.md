@@ -97,13 +97,13 @@ apex_config:
         fontSize: 10
         fontWeight: 400
 series:
-  - entity: sensor.home_battery_optimizer_battery_price_raw_two_days
+  - entity: sensor.home_battery_optimizer_battery_schedule
     name: Electricity price
     unit: " öre/kWh"
     yaxis_id: price
     data_generator: |
-      return entity.attributes.raw_two_days
-        ? entity.attributes.raw_two_days.map(entry => [new Date(entry.start), entry.value])
+      return entity.attributes.data
+        ? entity.attributes.data.map(entry => [new Date(entry.start), entry.price])
         : [];
     type: line
     float_precision: 0
@@ -125,21 +125,13 @@ series:
         color: magenta
       - value: 500
         color: black
-  - entity: sensor.home_battery_optimizer_battery_charge_raw_two_days
+  - entity: sensor.home_battery_optimizer_battery_schedule
     name: Charge
     yaxis_id: action
     data_generator: |
-      if (entity.attributes.windows) {
-        let arr = [];
-        entity.attributes.windows.forEach(win => {
-          win.raw_two_days.forEach((entry, i) => {
-            arr[i] = arr[i] || [new Date(entry.start), 0];
-            if (entry.charge === 1) arr[i][1] += 1;
-          });
-        });
-        return arr;
-      }
-      return [];
+      return entity.attributes.data
+        ? entity.attributes.data.map(entry => [new Date(entry.start), entry.charge === 1 ? 1 : 0])
+        : [];
     type: area
     curve: stepline
     color: "#4caf50"
@@ -148,21 +140,13 @@ series:
       in_header: false
       legend_value: false
     extend_to: false
-  - entity: sensor.home_battery_optimizer_battery_discharge_raw_two_days
+  - entity: sensor.home_battery_optimizer_battery_schedule
     name: Discharge
     yaxis_id: action
     data_generator: |
-      if (entity.attributes.windows) {
-        let arr = [];
-        entity.attributes.windows.forEach(win => {
-          win.raw_two_days.forEach((entry, i) => {
-            arr[i] = arr[i] || [new Date(entry.start), 0];
-            if (entry.discharge === 1) arr[i][1] -= 1;
-          });
-        });
-        return arr;
-      }
-      return [];
+      return entity.attributes.data
+        ? entity.attributes.data.map(entry => [new Date(entry.start), entry.discharge === 1 ? -1 : 0])
+        : [];
     type: area
     curve: stepline
     color: "#f44336"
@@ -171,12 +155,12 @@ series:
       in_header: false
       legend_value: false
     extend_to: false
-  - entity: sensor.home_battery_optimizer_estimated_soc
+  - entity: sensor.home_battery_optimizer_battery_schedule
     name: Estimated SoC
     yaxis_id: soc
     data_generator: |
-      return entity.attributes.raw_two_days
-        ? entity.attributes.raw_two_days.map(entry => [new Date(entry.start), entry.soc])
+      return entity.attributes.data
+        ? entity.attributes.data.map(entry => [new Date(entry.start), entry.soc])
         : [];
     type: line
     color: "#ffd600"
@@ -187,6 +171,7 @@ series:
     extend_to: false
 experimental:
   color_threshold: true
+
 ```
 
 ## License
