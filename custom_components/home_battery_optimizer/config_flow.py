@@ -6,7 +6,7 @@ import homeassistant.helpers.config_validation as cv
 from .const import DOMAIN
 
 class HomeBatteryOptimizerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 1
+    VERSION = 3
 
     async def async_step_user(self, user_input=None):
         if user_input is not None:
@@ -33,6 +33,8 @@ class HomeBatteryOptimizerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return HomeBatteryOptimizerOptionsFlow(config_entry)
 
 class HomeBatteryOptimizerOptionsFlow(config_entries.OptionsFlow):
+    VERSION = 3
+
     def __init__(self, config_entry):
         self.config_entry = config_entry
 

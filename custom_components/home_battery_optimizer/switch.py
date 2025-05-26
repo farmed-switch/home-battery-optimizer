@@ -11,6 +11,7 @@ from .entity import HBOEntity
 SWITCH_DESCRIPTIONS = [
     EntityDescription(key="charging", name="Battery Charging"),
     EntityDescription(key="discharging", name="Battery Discharging"),
+    EntityDescription(key="self_usage", name="Self Usage"),
 ]
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -23,7 +24,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 class BatteryOptimizerSwitch(HBOEntity, SwitchEntity):
     def __init__(self, coordinator, config_entry, description):
-        super().__init__(coordinator, config_entry, description)
+        HBOEntity.__init__(self, coordinator, config_entry, description)
+        SwitchEntity.__init__(self)
         self._key = description.key
         self._name = description.name
 
@@ -38,6 +40,8 @@ class BatteryOptimizerSwitch(HBOEntity, SwitchEntity):
             return self.coordinator.charging_on
         elif key == "discharging":
             return self.coordinator.discharging_on
+        elif key == "self_usage":
+            return getattr(self.coordinator, "self_usage_on", False)
         return False
 
     async def async_turn_on(self, **kwargs):
@@ -46,6 +50,8 @@ class BatteryOptimizerSwitch(HBOEntity, SwitchEntity):
             await self.coordinator.async_set_charging(True)
         elif key == "discharging":
             await self.coordinator.async_set_discharging(True)
+        elif key == "self_usage":
+            await self.coordinator.async_set_self_usage(True)
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs):
@@ -54,4 +60,6 @@ class BatteryOptimizerSwitch(HBOEntity, SwitchEntity):
             await self.coordinator.async_set_charging(False)
         elif key == "discharging":
             await self.coordinator.async_set_discharging(False)
+        elif key == "self_usage":
+            await self.coordinator.async_set_self_usage(False)
         self.async_write_ha_state()

@@ -21,7 +21,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 class BatteryOptimizerNumber(HBOEntity, NumberEntity):
     def __init__(self, coordinator, config_entry, description):
-        super().__init__(coordinator, config_entry, description)
+        HBOEntity.__init__(self, coordinator, config_entry, description)
+        NumberEntity.__init__(self)
         self._key = description.key
         self._name = description.name
         # Remove reference to description after extracting key and name
