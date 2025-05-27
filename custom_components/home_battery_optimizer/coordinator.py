@@ -56,13 +56,17 @@ class HomeBatteryOptimizerCoordinator:
     def update_soc(self):
         battery_entity_id = self.config.get("battery_entity")
         soc = None
+        soc_changed = False
         if battery_entity_id:
             battery_state = self.hass.states.get(battery_entity_id)
             if battery_state and battery_state.state not in (None, "", "unknown", "unavailable"):
                 try:
-                    soc = float(battery_state.state)
+                    new_soc = float(battery_state.state)
+                    soc_changed = (self.soc != new_soc)
+                    soc = new_soc
                 except Exception:
                     soc = None
+        soc_update_needed = soc_changed
         self.soc = soc
         # Hämta även effekt om tillgängligt
         battery_power_entity = self.config.get("battery_power_entity")
@@ -89,7 +93,7 @@ class HomeBatteryOptimizerCoordinator:
             self.status = "idle"
         else:
             self.status = None
-        return soc
+        return soc_update_needed
 
     def update_price_data(self):
         price_entity_id = self.config.get("nordpool_entity")
@@ -184,7 +188,7 @@ class HomeBatteryOptimizerCoordinator:
                 k += 1
             # 4. Store window (no overlap: next window starts after this one ends)
             window = {
-                "window": f"window_{window_counter}",
+                "window": window_counter,  # Ändra från f"window_{window_counter}" till int
                 "start": price_data[start_idx]["start"],
                 "end": price_data[peak_idx]["end"],
                 "min_price": min_price,
@@ -206,22 +210,33 @@ class HomeBatteryOptimizerCoordinator:
         schedule = []
         if self.price_data and soc is not None:
             # Basic schedule: charge if price is low enough, discharge if high enough
+            estimated_soc = soc
             for i, price_point in enumerate(self.price_data):
                 if i < len(self.price_data) - 1:
                     next_price_point = self.price_data[i + 1]
                     # Simple logic: charge if next hour's price is higher, discharge if lower
                     if price_point["value"] < next_price_point["value"]:
                         action = "charge"
+                        charge = 1
+                        discharge = 0
+                        estimated_soc = min(estimated_soc + self.charge_rate, self.max_battery_soc)
                     elif price_point["value"] > next_price_point["value"]:
                         action = "discharge"
+                        charge = 0
+                        discharge = 1
+                        estimated_soc = max(estimated_soc - self.discharge_rate, self.min_battery_soc)
                     else:
                         action = "idle"
+                        charge = 0
+                        discharge = 0
                     schedule.append({
                         "start": price_point["start"],
                         "end": price_point["end"],
                         "action": action,
                         "price": price_point["value"],
-                        "soc": soc  # Placeholder, will be updated
+                        "soc": estimated_soc,
+                        "charge": charge,
+                        "discharge": discharge
                     })
         schedule = self.limit_charge_windows(schedule, max_windows)
         # Identify charge windows (continuous charge blocks)
@@ -241,7 +256,7 @@ class HomeBatteryOptimizerCoordinator:
                 past = False
             # Detect start of a new charge window
             if action == "charge" and (current_window is None or not current_window["active"]):
-                current_window = {"active": True, "window": f"window_{window_counter}"}
+                current_window = {"active": True, "window": window_counter}
                 window_counter += 1
             elif action != "charge":
                 current_window = {"active": False, "window": None}
@@ -252,6 +267,8 @@ class HomeBatteryOptimizerCoordinator:
                 "action": action,
                 "price": item.get("price"),
                 "soc": item.get("soc"),
+                "charge": item.get("charge"),
+                "discharge": item.get("discharge"),
                 "past": past,
                 "charge_switch_on": item.get("charge_switch_on"),
                 "discharge_switch_on": item.get("discharge_switch_on"),
@@ -271,6 +288,170 @@ class HomeBatteryOptimizerCoordinator:
             window_indices.update(range(w["start_idx"], w["end_idx"]+1))
         for idx, item in enumerate(self.schedule):
             if idx not in window_indices:
+                item["window"] = None
+                item["action"] = "idle"
+        return self.schedule
+
+    def build_full_schedule(self):
+        """
+        Huvudmetod som bygger hela ladd- och urladdningsschemat enligt stepwise-logik:
+        1. Hämta data från self.config (Home Assistant)
+        2. Bygg prislista (self.price_data)
+        3. Identifiera tillgängliga timmar och första charge window
+        4. Planera laddning i window 1
+        5. Bygg discharge för window 1
+        6. Upprepa för window 2, 3, ...
+        Allt lagras i self.schedule.
+        """
+        # 1. Hämta data från self.config
+        soc = self.soc if self.soc is not None else 0
+        charge_rate = self.charge_rate
+        discharge_rate = self.discharge_rate
+        max_soc = self.max_battery_soc
+        min_soc = self.min_battery_soc
+        min_profit = self.min_profit
+        price_data = self.price_data or []
+        if not price_data or len(price_data) < 1:
+            self.schedule = []
+            return
+        # 2. Bygg prislista (self.price_data) - redan gjort
+        # 3. Initiera schedule med prisdata
+        self.schedule = []
+        for entry in price_data:
+            self.schedule.append({
+                "start": entry["start"],
+                "end": entry["end"],
+                "price": entry["value"],
+                "action": "idle",
+                "charge": 0,
+                "discharge": 0,
+                "window": None,
+                "estimated_soc": None
+            })
+        now = datetime.now()
+        # 4. Identifiera och planera windows iterativt
+        window_counter = 1
+        idx = 0
+        prev_discharge_end = 0
+        prev_soc = soc
+        while idx < len(self.schedule) and window_counter <= self.max_charge_windows:
+            # a) Hitta första möjliga start efter prev_discharge_end
+            available_idxs = [i for i in range(prev_discharge_end, len(self.schedule)) if datetime.fromisoformat(self.schedule[i]["end"]) > now]
+            if not available_idxs:
+                break
+            start_idx = available_idxs[0]
+            # b) Hitta window: fallande pris till minimum, sedan ökning >= min_profit
+            i = start_idx
+            n = len(self.schedule)
+            # Hitta lokal minimum
+            while i+1 < n and self.schedule[i+1]["price"] < self.schedule[i]["price"]:
+                i += 1
+            min_idx = i
+            min_price = self.schedule[min_idx]["price"]
+            # Hitta första index där priset ökar minst min_profit
+            found = False
+            j = min_idx + 1
+            while j < n:
+                if self.schedule[j]["price"] >= min_price + min_profit:
+                    found = True
+                    break
+                if self.schedule[j]["price"] < min_price:
+                    min_price = self.schedule[j]["price"]
+                    min_idx = j
+                j += 1
+            if not found:
+                break  # Inga fler windows
+            # Hitta peak (slut på window)
+            peak_idx = j
+            peak_price = self.schedule[peak_idx]["price"]
+            k = j + 1
+            while k < n and self.schedule[k]["price"] > peak_price:
+                peak_idx = k
+                peak_price = self.schedule[k]["price"]
+                k += 1
+            window_start = start_idx
+            window_end = peak_idx
+            # c) Planera laddning i window
+            soc_needed = max(0, max_soc - prev_soc)
+            hours_needed = int((soc_needed + charge_rate - 1) // charge_rate)
+            if soc_needed < 5:
+                hours_needed = 0
+            window_prices = [(i, self.schedule[i]["price"]) for i in range(window_start, window_end+1)]
+            sorted_hours = sorted(window_prices, key=lambda x: x[1])
+            charge_idxs = sorted([i for i, _ in sorted_hours[:hours_needed]])
+            # Markera charge och estimated_soc
+            current_soc = prev_soc
+            charge_prices = []
+            for i in range(window_start, window_end+1):
+                if i in charge_idxs and current_soc < max_soc - 5:
+                    self.schedule[i]["charge"] = 1
+                    self.schedule[i]["action"] = "charge"
+                    charge_prices.append(self.schedule[i]["price"])
+                    current_soc = min(current_soc + charge_rate, max_soc)
+                else:
+                    self.schedule[i]["charge"] = 0
+                self.schedule[i]["window"] = window_counter
+                self.schedule[i]["estimated_soc"] = round(current_soc, 2)
+            avg_charge_price = sum(charge_prices) / len(charge_prices) if charge_prices else 0
+            # d) Bygg discharge för window
+            # Starta discharge vid sista timmen i window
+            discharge_soc = self.schedule[window_end]["estimated_soc"] if self.schedule[window_end]["estimated_soc"] is not None else current_soc
+            soc_needed_discharge = max(discharge_soc - min_soc, 0)
+            hours_needed_discharge = int((soc_needed_discharge + discharge_rate - 1) // discharge_rate)
+            if hours_needed_discharge < 1:
+                prev_discharge_end = window_end + 1
+                prev_soc = current_soc
+                window_counter += 1
+                continue
+            lookup = max(0, hours_needed_discharge - 1)
+            idxs = list(range(max(0, window_end - lookup), min(n, window_end + lookup + 1)))
+            prices = [(i, self.schedule[i]["price"]) for i in idxs]
+            last_price = self.schedule[window_end]["price"]
+            max_price = max(prices, key=lambda x: x[1])[1] if prices else last_price
+            # Om någon annan timme har högre pris, flytta window_end till den timmen och upprepa
+            while max_price > last_price:
+                max_idx = max(prices, key=lambda x: x[1])[0]
+                window_end = max_idx
+                discharge_soc = self.schedule[window_end]["estimated_soc"] if self.schedule[window_end]["estimated_soc"] is not None else current_soc
+                soc_needed_discharge = max(discharge_soc - min_soc, 0)
+                hours_needed_discharge = int((soc_needed_discharge + discharge_rate - 1) // discharge_rate)
+                if hours_needed_discharge < 1:
+                    break
+                lookup = max(0, hours_needed_discharge - 1)
+                idxs = list(range(max(0, window_end - lookup), min(n, window_end + lookup + 1)))
+                prices = [(i, self.schedule[i]["price"]) for i in idxs]
+                last_price = self.schedule[window_end]["price"]
+                max_price = max(prices, key=lambda x: x[1])[1] if prices else last_price
+            # Välj de timmar med högst pris, men endast om de uppnår min_profit
+            discharge_candidates = [(i, price) for i, price in prices if price >= avg_charge_price + min_profit]
+            discharge_candidates.sort(key=lambda x: x[1], reverse=True)
+            discharge_idxs = sorted([i for i, _ in discharge_candidates[:hours_needed_discharge]])
+            # Markera discharge och estimated_soc
+            current_soc = discharge_soc
+            for i in range(n):
+                if i in discharge_idxs and current_soc > min_soc:
+                    self.schedule[i]["discharge"] = 1
+                    self.schedule[i]["action"] = "discharge"
+                    current_soc = max(current_soc - discharge_rate, min_soc)
+                elif self.schedule[i]["window"] == window_counter:
+                    # Sätt charge=0 för timmar som är tomma i window efter discharge start
+                    if discharge_idxs and i >= discharge_idxs[0]:
+                        self.schedule[i]["charge"] = 0
+                # estimated_soc för discharge
+                if self.schedule[i]["window"] == window_counter:
+                    self.schedule[i]["estimated_soc"] = round(current_soc, 2)
+            # Sätt window 2 på första timmen efter att discharge är klar
+            if discharge_idxs:
+                prev_discharge_end = discharge_idxs[-1] + 1
+                prev_soc = current_soc
+            else:
+                prev_discharge_end = window_end + 1
+                prev_soc = current_soc
+            window_counter += 1
+        # Sätt window=None och action=idle för timmar utanför alla windows
+        used_windows = set([item["window"] for item in self.schedule if item["window"] is not None])
+        for i, item in enumerate(self.schedule):
+            if item["window"] not in used_windows:
                 item["window"] = None
                 item["action"] = "idle"
         return self.schedule
@@ -409,17 +590,15 @@ class HomeBatteryOptimizerCoordinator:
 
     async def async_update_sensors(self):
         """Update SoC, price data, schedule, and notify listeners."""
-        self.update_soc()
+        soc_update_needed = self.update_soc()
         self.update_price_data()
-        # Generate schedule if SoC is available
-        if self.soc is not None:
-            self.generate_schedule(self.soc, self.max_charge_windows)
-        # Optionally: update charge/discharge periods
-        self.find_charge_windows()
-        self.build_charge_schedule_windows()  # <-- Lägg till denna rad
-        self.build_discharge_schedule_windows()
+        _LOGGER.warning(f"[HBO DEBUG] soc={self.soc}, price_data_len={len(self.price_data) if self.price_data else 0}")
+        # Bygg alltid nytt schema enligt stepwise-logik
+        self.build_full_schedule()
+        _LOGGER.warning(f"[HBO DEBUG] schedule_len={len(self.schedule)}; first={self.schedule[0] if self.schedule else None}")
+        # Self use-logik ska alltid uppdateras
+        await self.async_update_self_usage()
         self.update_charge_discharge_periods()
-        # Notify all listeners/entities
         if hasattr(self, 'async_update_listeners'):
             await self.async_update_listeners()
         # If entities are not using listeners, you may need to call async_write_ha_state on each
@@ -579,34 +758,17 @@ class HomeBatteryOptimizerCoordinator:
 
     def build_charge_schedule_windows(self):
         """
-        Bygg laddschema för alla charge_windows (window 1, 2, 3, 4):
-        - För varje window: utgå från estimated_soc efter föregående window (eller SoC för window 1)
-        - Om det finns ett discharge window före, utgå från sista SoC i estimated_soc_discharge_windowN
-        - Endast timmar i aktuellt window som inte redan använts i tidigare windows får användas
-        - Skriv charge_raw_windowN och estimated_soc_windowN
+        Build charge schedule for all charge windows:
+        - For each window: start from estimated SoC after previous window (or SoC for window 1)
+        - Only use hours in the current window that are not already used in previous windows
+        - Annotate each schedule entry with per-window charge plan and estimated SoC
+        - All results are stored in self.schedule, not as dynamic attributes
         """
         if not self.price_data or not hasattr(self, "charge_windows") or not self.charge_windows:
-            for n in range(1, 5):
-                setattr(self, f"charge_raw_window{n}", None)
-                setattr(self, f"estimated_soc_window{n}", None)
             return []
         used_idxs = set()
         prev_soc = self.soc if self.soc is not None else 0
         for n, window in enumerate(self.charge_windows[:4], start=1):
-            # Always use SoC after previous discharge window if it exists and is non-empty
-            if n > 1:
-                prev_discharge = getattr(self, f"estimated_soc_discharge_window{n-1}", None)
-                prev_discharge_soc = None
-                if prev_discharge and len(prev_discharge) > 0:
-                    # Use the last SoC in the discharge window (should be after all discharge hours)
-                    prev_discharge_soc = prev_discharge[-1]["soc"]
-                if prev_discharge_soc is not None:
-                    prev_soc = prev_discharge_soc
-                else:
-                    # Fallback: use last SoC from previous charge window
-                    prev_charge = getattr(self, f"estimated_soc_window{n-1}", None)
-                    if prev_charge and len(prev_charge) > 0:
-                        prev_soc = prev_charge[-1]["soc"]
             start_idx = window["start_idx"]
             end_idx = window["end_idx"]
             max_soc = self.max_battery_soc
@@ -615,22 +777,15 @@ class HomeBatteryOptimizerCoordinator:
             hours_needed = int((soc_needed + charge_rate - 1) // charge_rate)
             if soc_needed < 5:
                 hours_needed = 0
-            # Endast tillåt timmar i detta window som INTE är i tidigare windows
             window_idxs = [i for i in range(start_idx, end_idx+1) if i not in used_idxs]
             window_prices = [(i, float(self.price_data[i]["value"])) for i in window_idxs]
             sorted_hours = sorted(window_prices, key=lambda x: x[1])
             charge_idxs = sorted([i for i, _ in sorted_hours[:hours_needed]])
-            charge_raw = []
-            estimated_soc = []
             current_soc = prev_soc
-            now = datetime.now()
-            # For average charge price calculation
             charge_prices = []
             for i in range(len(self.price_data)):
                 entry = self.price_data[i]
                 in_window = i in window_idxs
-                # end_dt = datetime.fromisoformat(entry["end"])
-                # is_future = end_dt > now
                 charge = 1 if i in charge_idxs and in_window else 0
                 if current_soc >= max_soc - 5:
                     charge = 0
@@ -638,139 +793,91 @@ class HomeBatteryOptimizerCoordinator:
                     current_soc = min(current_soc + charge_rate, max_soc)
                     if in_window:
                         charge_prices.append(float(entry["value"]))
-                charge_raw.append({
-                    "start": entry["start"],
-                    "end": entry["end"],
-                    "charge": charge
-                })
-                estimated_soc.append({
-                    "start": entry["start"],
-                    "end": entry["end"],
-                    "soc": round(current_soc, 2)
-                })
-            setattr(self, f"charge_raw_window{n}", charge_raw)
-            setattr(self, f"estimated_soc_window{n}", estimated_soc)
-            # Calculate and store average charge price for this window
+                # Annotate schedule entry if it exists
+                if i < len(self.schedule):
+                    self.schedule[i][f"charge_window_{n}"] = charge
+                    self.schedule[i][f"estimated_soc_window_{n}"] = round(current_soc, 2)
             avg_price = sum(charge_prices) / len(charge_prices) if charge_prices else None
-            setattr(self, f"avg_charge_price_window{n}", avg_price)
-            # För nästa window: utgå från sista SoC i estimated_soc (om ingen discharge)
-            for entry in reversed(estimated_soc):
-                end_dt = datetime.fromisoformat(entry["end"])
-                if end_dt <= now:
-                    prev_soc = entry["soc"]
+            window["avg_charge_price"] = avg_price
+            # For next window: use last SoC in window
+            for i in reversed(range(start_idx, end_idx+1)):
+                if i < len(self.schedule):
+                    prev_soc = self.schedule[i][f"estimated_soc_window_{n}"]
                     break
-            else:
-                prev_soc = estimated_soc[end_idx]["soc"]
             used_idxs.update(window_idxs)
         return True
 
-    def get_soc_for_index(self, estimated_soc, idx):
-        """Hämta SoC för en viss index från estimated_soc-listan."""
-        if not estimated_soc or idx < 0 or idx >= len(estimated_soc):
-            return None
-        return estimated_soc[idx]["soc"]
-
     def build_discharge_schedule_windows(self):
         """
-        Förbättrad urladdningslogik:
-        - Discharge kan börja i slutet av charge window och gå bakåt/framåt kring sista timmen.
-        - Samla t.ex. 2 timmar före och 2 timmar efter sista timmen (totalt 5 timmar).
-        - Sortera dessa på pris, välj de högsta (så många som SoC/discharge_rate tillåter).
-        - Om någon av dessa timmar har högre pris än starttimmen, flytta start till den timmen och upprepa.
-        - När discharge planeras på en timme i charge window, sätt charge=0 från och med den timmen och framåt i window.
-        - estimated_soc och sensorer uppdateras korrekt.
+        Förbättrad discharge-logik:
+        - Discharge startar vid slutet av en charge window och väljer bästa timmar runt detta index
+        - Endast timmar där priset är minst (avg_charge_price + min_profit) används
+        - Annoterar self.schedule med discharge=1 för dessa timmar, övriga får discharge=0
+        - estimated_soc uppdateras för varje discharge-timme
+        - Allt sker per window och är generaliserat
         """
         if not self.price_data or not hasattr(self, "charge_windows") or not self.charge_windows:
-            for n in range(1, 5):
-                setattr(self, f"discharge_raw_window{n}", None)
-                setattr(self, f"estimated_soc_discharge_window{n}", None)
             return []
         now = datetime.now()
         min_profit = getattr(self, "min_profit", 10)
-        deadband = 5  # Always keep at least this much above min_battery_soc
         num_windows = len(self.charge_windows)
         for n in range(1, num_windows + 1):
-            prev_charge = getattr(self, f"estimated_soc_window{n}", None)
-            prev_window = self.charge_windows[n-1]
-            start_idx = prev_window["start_idx"]
-            end_idx = prev_window["end_idx"]
-            # 1. Utgångspunkt: sista timmen i window
+            window = self.charge_windows[n-1]
+            start_idx = window["start_idx"]
+            end_idx = window["end_idx"]
+            # Start discharge vid sista timmen i window
             start_discharge_idx = end_idx
-            # 2. Samla 2 timmar före och 2 timmar efter (totalt 5 timmar)
-            idxs = list(range(max(0, start_discharge_idx-2), min(len(self.price_data), start_discharge_idx+3)))
-            # 3. Sortera dessa på pris (fallande)
-            price_candidates = [(i, float(self.price_data[i]["value"])) for i in idxs]
-            price_candidates.sort(key=lambda x: x[1], reverse=True)
-            # 4. Välj så många timmar som batteriet klarar
-            avg_charge_price = getattr(self, f"avg_charge_price_window{n}", None)
-            if avg_charge_price is None:
-                avg_charge_price = 0
+            # Hämta SoC från sista charge-timmen i window (eller self.soc om tiden passerat)
+            soc = self.schedule[start_discharge_idx][f"estimated_soc_window_{n}"] if start_discharge_idx < len(self.schedule) and f"estimated_soc_window_{n}" in self.schedule[start_discharge_idx] else self.soc or 0
             min_soc = self.min_battery_soc
             discharge_rate = self.discharge_rate
-            # Always use SoC at candidate start time
-            soc = self.get_soc_for_index(prev_charge, start_discharge_idx-1) or self.soc or 0
-            soc_limit = min_soc  # FIX: allow discharge to true min_soc, not min_soc + deadband
-            soc_needed = max(soc - soc_limit, 0)
-            hours_possible = int((soc_needed + discharge_rate - 1) // discharge_rate)
-            # 5. Filtrera på min_profit
-            discharge_candidates = [i for i, price in price_candidates if price >= avg_charge_price + min_profit]
-            # 6. Ta högsta timmarna, max så många som batteriet klarar
-            discharge_idxs = sorted(discharge_candidates[:hours_possible])
-            # 7. Om någon av dessa timmar har högre pris än starttimmen, flytta start till den timmen och upprepa
-            if discharge_idxs:
-                start_price = float(self.price_data[start_discharge_idx]["value"])
-                max_price_idx = max(discharge_idxs, key=lambda i: float(self.price_data[i]["value"]))
-                if float(self.price_data[max_price_idx]["value"]) > start_price and max_price_idx != start_discharge_idx:
-                    # Flytta start till max_price_idx och kör om logiken
-                    start_discharge_idx = max_price_idx
-                    # Recalculate SoC at new candidate start
-                    soc = self.get_soc_for_index(prev_charge, start_discharge_idx-1) or self.soc or 0
-                    soc_needed = max(soc - soc_limit, 0)
-                    hours_possible = int((soc_needed + discharge_rate - 1) // discharge_rate)
-                    idxs = list(range(max(0, start_discharge_idx-2), min(len(self.price_data), start_discharge_idx+3)))
-                    price_candidates = [(i, float(self.price_data[i]["value"])) for i in idxs]
-                    price_candidates.sort(key=lambda x: x[1], reverse=True)
-                    discharge_candidates = [i for i, price in price_candidates if price >= avg_charge_price + min_profit]
-                    discharge_idxs = sorted(discharge_candidates[:hours_possible])
-            # Om ingen timme uppfyller min_profit, ingen urladdning
-            if not discharge_idxs:
-                setattr(self, f"discharge_raw_window{n}", None)
-                setattr(self, f"estimated_soc_discharge_window{n}", None)
+            soc_needed = max(soc - min_soc, 0)
+            hours_needed = int((soc_needed + discharge_rate - 1) // discharge_rate)
+            if hours_needed < 1:
                 continue
-            # Bygg discharge_raw och estimated_soc
-            discharge_raw = []
-            estimated_soc = []
+            # "time discharge lookup" = hours_needed - 1
+            lookup = max(0, hours_needed - 1)
+            # Titta på timmarna runt sista window
+            idxs = list(range(max(0, start_discharge_idx - lookup), min(len(self.price_data), start_discharge_idx + lookup + 1)))
+            # Jämför priset på sista timmen i window med övriga
+            prices = [(i, float(self.price_data[i]["value"])) for i in idxs]
+            last_price = float(self.price_data[start_discharge_idx]["value"]) if start_discharge_idx < len(self.price_data) else 0
+            max_price = max(prices, key=lambda x: x[1])[1] if prices else last_price
+            # Om någon annan timme har högre pris, flytta window-slut till den timmen och upprepa
+            if max_price > last_price:
+                max_idx = max(prices, key=lambda x: x[1])[0]
+                end_idx = max_idx
+                start_discharge_idx = end_idx
+                soc = self.schedule[start_discharge_idx][f"estimated_soc_window_{n}"] if start_discharge_idx < len(self.schedule) and f"estimated_soc_window_{n}" in self.schedule[start_discharge_idx] else self.soc or 0
+                soc_needed = max(soc - min_soc, 0)
+                hours_needed = int((soc_needed + discharge_rate - 1) // discharge_rate)
+                if hours_needed < 1:
+                    continue
+                lookup = max(0, hours_needed - 1)
+                idxs = list(range(max(0, start_discharge_idx - lookup), min(len(self.price_data), start_discharge_idx + lookup + 1)))
+                prices = [(i, float(self.price_data[i]["value"])) for i in idxs]
+            # Välj de timmar med högst pris, men endast om de uppnår min_profit
+            avg_charge_price = window.get("avg_charge_price", 0)
+            discharge_candidates = [(i, price) for i, price in prices if price >= avg_charge_price + min_profit]
+            discharge_candidates.sort(key=lambda x: x[1], reverse=True)
+            discharge_idxs = sorted([i for i, _ in discharge_candidates[:hours_needed]])
+            # Markera i self.schedule
             current_soc = soc
-            # DEBUG: Log discharge window selection
-            _LOGGER.debug(f"Discharge window {n}: soc={soc}, soc_limit={soc_limit}, soc_needed={soc_needed}, hours_possible={hours_possible}, discharge_idxs={discharge_idxs}")
             for i in range(len(self.price_data)):
                 entry = self.price_data[i]
                 in_window = i in discharge_idxs
                 end_dt = datetime.fromisoformat(entry["end"])
                 is_future = end_dt > now
-                # Only discharge if above min_battery_soc
-                discharge = 1 if in_window and is_future and current_soc > soc_limit else 0
+                discharge = 1 if in_window and is_future and current_soc > min_soc else 0
                 if discharge:
-                    _LOGGER.debug(f"Discharge hour: i={i}, current_soc before={current_soc}, after={max(current_soc - discharge_rate, soc_limit)}")
-                    current_soc = max(current_soc - discharge_rate, soc_limit)
-                discharge_raw.append({
-                    "start": entry["start"],
-                    "end": entry["end"],
-                    "discharge": discharge
-                })
-                estimated_soc.append({
-                    "start": entry["start"],
-                    "end": entry["end"],
-                    "soc": round(current_soc, 2)
-                })
-            setattr(self, f"discharge_raw_window{n}", discharge_raw)
-            setattr(self, f"estimated_soc_discharge_window{n}", estimated_soc)
-            # Begränsa charge window så att charge=0 från och med första discharge-timmen
-            charge_raw = getattr(self, f"charge_raw_window{n}", None)
-            if charge_raw:
-                discharge_start_idx = discharge_idxs[0] if discharge_idxs else None
-                if discharge_start_idx is not None:
-                    for j in range(discharge_start_idx, len(charge_raw)):
-                        charge_raw[j]["charge"] = 0
-                setattr(self, f"charge_raw_window{n}", charge_raw)
+                    current_soc = max(current_soc - discharge_rate, min_soc)
+                if i < len(self.schedule):
+                    self.schedule[i][f"discharge_window_{n}"] = discharge
+                    self.schedule[i][f"estimated_soc_discharge_window_{n}"] = round(current_soc, 2)
+            # Sätt charge=0 för alla timmar som är tomma i window n efter discharge start
+            if discharge_idxs:
+                discharge_start_idx = discharge_idxs[0]
+                for j in range(discharge_start_idx, len(self.schedule)):
+                    if f"charge_window_{n}" in self.schedule[j]:
+                        self.schedule[j][f"charge_window_{n}"] = 0
         return True
