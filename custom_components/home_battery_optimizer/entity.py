@@ -10,10 +10,17 @@ class HBOEntity(Entity):
         self.coordinator = coordinator
         self.config_entry = config_entry
         self.entity_description = description
-        self._attr_translation_key = description.key
-        self._attr_has_entity_name = True
-        self._attr_unique_id = f"{config_entry.entry_id}_{description.key}"
-        self._attr_name = description.name
+        if description is not None:
+            self._attr_translation_key = description.key
+            self._attr_has_entity_name = True
+            self._attr_unique_id = f"{config_entry.entry_id}_{description.key}"
+            self._attr_name = description.name
+        else:
+            # Sensorn: sätt defaultnamn och unikt id
+            self._attr_has_entity_name = False
+            self._attr_unique_id = f"{config_entry.entry_id}_schedule"
+            self._attr_name = "Battery Schedule"
+            self.entity_description = None
         # Register update callback for state refresh
         if hasattr(self.coordinator, "add_update_callback"):
             self.coordinator.add_update_callback(self.async_write_ha_state)
@@ -27,6 +34,82 @@ class HBOEntity(Entity):
             "model": "Home Battery Optimizer",
             "manufacturer": "farmed-switch",
         }
+
+    @property
+    def device_class(self):
+        # Returnera None om entity_description saknas
+        if hasattr(self, "entity_description") and self.entity_description is not None and hasattr(self.entity_description, "device_class"):
+            return self.entity_description.device_class
+        return None
+
+    @property
+    def entity_registry_enabled_default(self):
+        # Returnera True om entity_description saknas (default), annars fråga entity_description
+        if hasattr(self, "entity_description") and self.entity_description is not None and hasattr(self.entity_description, "entity_registry_enabled_default"):
+            return self.entity_description.entity_registry_enabled_default
+        return True
+
+    @property
+    def entity_registry_visible_default(self):
+        # Return True if entity_description is None (default), otherwise ask entity_description
+        if hasattr(self, "entity_description") and self.entity_description is not None and hasattr(self.entity_description, "entity_registry_visible_default"):
+            return self.entity_description.entity_registry_visible_default
+        return True
+
+    @property
+    def icon(self):
+        return "mdi:battery-clock"
+
+    @property
+    def translation_key(self):
+        return None
+
+    @property
+    def native_unit_of_measurement(self):
+        return None
+
+    @property
+    def suggested_unit_of_measurement(self):
+        return None
+
+    @property
+    def state_class(self):
+        return None
+
+    @property
+    def options(self):
+        return None
+
+    @property
+    def entity_category(self):
+        return None
+
+    @property
+    def has_entity_name(self):
+        return getattr(self, '_attr_has_entity_name', False)
+
+    @property
+    def unique_id(self):
+        return getattr(self, '_attr_unique_id', None)
+
+    @property
+    def name(self):
+        return getattr(self, '_attr_name', None)
+
+    @property
+    def suggested_display_precision(self):
+        return None
+
+    @property
+    def last_reset(self):
+        return None
+
+    @property
+    def force_update(self):
+        # Returnera False om entity_description saknas, annars fråga entity_description
+        if hasattr(self, "entity_description") and self.entity_description is not None and hasattr(self.entity_description, "force_update"):
+            return self.entity_description.force_update
+        return False
 
     async def async_added_to_hass(self):
         # Register for coordinator updates if available

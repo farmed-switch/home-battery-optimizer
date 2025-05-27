@@ -20,6 +20,10 @@ class HBOScheduleSensor(HBOEntity, SensorEntity):
     @property
     def state(self):
         # Status, t.ex. "idle (2), SoC: 100.0%"
+        schedule = getattr(self.coordinator, 'schedule', [])
+        if not schedule:
+            _LOGGER.warning("[HBO] Battery Schedule sensor: schedule is empty or unavailable!")
+            return "unavailable"
         soc = self.coordinator.soc if hasattr(self.coordinator, 'soc') else None
         status = self._get_status()
         if soc is not None:
@@ -47,15 +51,18 @@ class HBOScheduleSensor(HBOEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        # Soc, Target soc, Current power
         attrs = {}
-        attrs["soc"] = self.coordinator.soc if hasattr(self.coordinator, 'soc') else None
+        schedule = getattr(self.coordinator, 'schedule', [])
+        if not schedule:
+            _LOGGER.warning("[HBO] Battery Schedule sensor: schedule is empty or unavailable! Attributes will be minimal.")
+            attrs["error"] = "schedule is empty or unavailable"
+        attrs["estimated_soc"] = schedule[-1].get("estimated_soc") if schedule and "estimated_soc" in schedule[-1] else None
         attrs["target_soc"] = getattr(self.coordinator, 'target_soc', 'Unknown')
         attrs["current_power"] = getattr(self.coordinator, 'current_power', None)
-        # Charge windows
         attrs["charge_windows"] = self._get_charge_windows()
-        # Data (timrad tabell)
-        attrs["data"] = self._get_data_table()
+        data_table = self._get_data_table()
+        attrs["data"] = data_table
+        attrs["schedule"] = data_table  # For ApexCharts compatibility
         return attrs
 
     def _get_charge_windows(self):
@@ -95,9 +102,39 @@ class HBOScheduleSensor(HBOEntity, SensorEntity):
                 "end": entry.get("end"),
                 "action": entry.get("action"),
                 "price": entry.get("price"),
-                "soc": entry.get("soc"),
+                "estimated_soc": entry.get("estimated_soc"),
                 "charge": entry.get("charge"),
                 "discharge": entry.get("discharge"),
                 "window": entry.get("window")
             })
         return data
+
+    @property
+    def state_class(self):
+        # Returnera None för att undvika AttributeError när entity_description saknas
+        return None
+
+    @property
+    def options(self):
+        # Returnera None för att undvika AttributeError när entity_description saknas
+        return None
+    
+    @property
+    def entity_category(self):
+        # Returnera None för att undvika AttributeError när entity_description saknas
+        return None
+    
+    @property
+    def icon(self):
+        # Returnera en standardikon för sensorn
+        return "mdi:battery-clock"
+
+    @property
+    def translation_key(self):
+        # Returnera None eller en unik sträng för sensorn
+        return None
+    
+    @property
+    def native_unit_of_measurement(self):
+        # Returnera None för att undvika AttributeError när entity_description saknas
+        return None

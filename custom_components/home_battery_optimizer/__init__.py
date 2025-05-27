@@ -14,6 +14,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up a config entry for Home Battery Optimizer."""
     hass.data.setdefault(DOMAIN, {})
     coordinator = HomeBatteryOptimizerCoordinator(hass, entry.data)
+    # Bygg schema första gången med alla passed=False
+    coordinator.build_full_schedule(force_all_unpassed=True)
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     # Store unsubscribe callbacks for listeners

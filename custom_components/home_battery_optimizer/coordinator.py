@@ -204,106 +204,16 @@ class HomeBatteryOptimizerCoordinator:
         _LOGGER.debug(f"Total windows found: {len(windows)}")
         return windows
 
-    def generate_schedule(self, soc, max_windows=3):
-        # Only use available data and limit charge windows
-        # Build schedule based on self.price_data and self.soc
-        schedule = []
-        if self.price_data and soc is not None:
-            # Basic schedule: charge if price is low enough, discharge if high enough
-            estimated_soc = soc
-            for i, price_point in enumerate(self.price_data):
-                if i < len(self.price_data) - 1:
-                    next_price_point = self.price_data[i + 1]
-                    # Simple logic: charge if next hour's price is higher, discharge if lower
-                    if price_point["value"] < next_price_point["value"]:
-                        action = "charge"
-                        charge = 1
-                        discharge = 0
-                        estimated_soc = min(estimated_soc + self.charge_rate, self.max_battery_soc)
-                    elif price_point["value"] > next_price_point["value"]:
-                        action = "discharge"
-                        charge = 0
-                        discharge = 1
-                        estimated_soc = max(estimated_soc - self.discharge_rate, self.min_battery_soc)
-                    else:
-                        action = "idle"
-                        charge = 0
-                        discharge = 0
-                    schedule.append({
-                        "start": price_point["start"],
-                        "end": price_point["end"],
-                        "action": action,
-                        "price": price_point["value"],
-                        "soc": estimated_soc,
-                        "charge": charge,
-                        "discharge": discharge
-                    })
-        schedule = self.limit_charge_windows(schedule, max_windows)
-        # Identify charge windows (continuous charge blocks)
-        base_time = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        formatted_schedule = []
-        window_counter = 1
-        current_window = None
-        for i, item in enumerate(schedule):
-            start_dt = base_time + timedelta(hours=i)
-            end_dt = base_time + timedelta(hours=i+1)
-            action = item.get("action", "idle")
-            # Markera timmar som redan har passerat som 'past' och 'idle'
-            if end_dt <= datetime.now():
-                action = "idle"
-                past = True
-            else:
-                past = False
-            # Detect start of a new charge window
-            if action == "charge" and (current_window is None or not current_window["active"]):
-                current_window = {"active": True, "window": window_counter}
-                window_counter += 1
-            elif action != "charge":
-                current_window = {"active": False, "window": None}
-            window_name = current_window["window"] if current_window and current_window["active"] else None
-            formatted_schedule.append({
-                "start": start_dt.isoformat(),
-                "end": end_dt.isoformat(),
-                "action": action,
-                "price": item.get("price"),
-                "soc": item.get("soc"),
-                "charge": item.get("charge"),
-                "discharge": item.get("discharge"),
-                "past": past,
-                "charge_switch_on": item.get("charge_switch_on"),
-                "discharge_switch_on": item.get("discharge_switch_on"),
-                "window": window_name
-            })
-        self.schedule = formatted_schedule
-        # After schedule is built, find and label charge windows
-        self.find_charge_windows()
-        # Set window tag for every hour in each window range (not just charge hours)
-        for w in self.charge_windows:
-            for idx in range(w["start_idx"], w["end_idx"]+1):
-                if idx < len(self.schedule):
-                    self.schedule[idx]["window"] = w["window"]
-        # Sätt action: 'idle' och window: None för timmar utanför alla charge windows
-        window_indices = set()
-        for w in self.charge_windows:
-            window_indices.update(range(w["start_idx"], w["end_idx"]+1))
-        for idx, item in enumerate(self.schedule):
-            if idx not in window_indices:
-                item["window"] = None
-                item["action"] = "idle"
-        return self.schedule
-
-    def build_full_schedule(self):
+    def build_full_schedule(self, force_all_unpassed=False):
         """
         Huvudmetod som bygger hela ladd- och urladdningsschemat enligt stepwise-logik:
         1. Hämta data från self.config (Home Assistant)
         2. Bygg prislista (self.price_data)
-        3. Identifiera tillgängliga timmar och första charge window
-        4. Planera laddning i window 1
-        5. Bygg discharge för window 1
-        6. Upprepa för window 2, 3, ...
-        Allt lagras i self.schedule.
+        3. Initiera schedule med prisdata (hela dygnet, även historik)
+        4. Markera alla timmar där end < now som passed=True (om force_all_unpassed=False)
+        5. Endast framtida timmar (passed=False) får ändras av window/charge/discharge-logik
+        6. Allt lagras i self.schedule.
         """
-        # 1. Hämta data från self.config
         soc = self.soc if self.soc is not None else 0
         charge_rate = self.charge_rate
         discharge_rate = self.discharge_rate
@@ -311,13 +221,19 @@ class HomeBatteryOptimizerCoordinator:
         min_soc = self.min_battery_soc
         min_profit = self.min_profit
         price_data = self.price_data or []
-        if not price_data or len(price_data) < 1:
+        # Kontroll: Bygg bara schema om både SoC och prisdata är giltiga
+        if soc is None or not price_data or len(price_data) < 1:
+            _LOGGER.warning("[HBO] Skipping schedule build: SoC or price data not available yet (build_full_schedule).")
             self.schedule = []
             return
-        # 2. Bygg prislista (self.price_data) - redan gjort
-        # 3. Initiera schedule med prisdata
         self.schedule = []
+        now = datetime.now()
+        # Initiera schedule med passed-attribut
         for entry in price_data:
+            end_dt = datetime.fromisoformat(entry["end"])
+            passed = False
+            if not force_all_unpassed:
+                passed = end_dt < now
             self.schedule.append({
                 "start": entry["start"],
                 "end": entry["end"],
@@ -326,23 +242,23 @@ class HomeBatteryOptimizerCoordinator:
                 "charge": 0,
                 "discharge": 0,
                 "window": None,
-                "estimated_soc": None
+                "estimated_soc": None,
+                "passed": passed
             })
-        now = datetime.now()
-        # 4. Identifiera och planera windows iterativt
+        # Window-skapande och laddlogik utgår nu från första timmen, och logik körs för ALLA timmar
         window_counter = 1
         idx = 0
         prev_discharge_end = 0
         prev_soc = soc
-        while idx < len(self.schedule) and window_counter <= self.max_charge_windows:
-            # a) Hitta första möjliga start efter prev_discharge_end
-            available_idxs = [i for i in range(prev_discharge_end, len(self.schedule)) if datetime.fromisoformat(self.schedule[i]["end"]) > now]
+        n = len(self.schedule)
+        while idx < n:
+            # a) Hitta första möjliga start efter prev_discharge_end (även passed)
+            available_idxs = [i for i in range(prev_discharge_end, n)]
             if not available_idxs:
                 break
             start_idx = available_idxs[0]
             # b) Hitta window: fallande pris till minimum, sedan ökning >= min_profit
             i = start_idx
-            n = len(self.schedule)
             # Hitta lokal minimum
             while i+1 < n and self.schedule[i+1]["price"] < self.schedule[i]["price"]:
                 i += 1
@@ -360,7 +276,7 @@ class HomeBatteryOptimizerCoordinator:
                     min_idx = j
                 j += 1
             if not found:
-                break  # Inga fler windows
+                break
             # Hitta peak (slut på window)
             peak_idx = j
             peak_price = self.schedule[peak_idx]["price"]
@@ -371,7 +287,7 @@ class HomeBatteryOptimizerCoordinator:
                 k += 1
             window_start = start_idx
             window_end = peak_idx
-            # c) Planera laddning i window
+            # c) Planera laddning i window (alla timmar)
             soc_needed = max(0, max_soc - prev_soc)
             hours_needed = int((soc_needed + charge_rate - 1) // charge_rate)
             if soc_needed < 5:
@@ -379,7 +295,6 @@ class HomeBatteryOptimizerCoordinator:
             window_prices = [(i, self.schedule[i]["price"]) for i in range(window_start, window_end+1)]
             sorted_hours = sorted(window_prices, key=lambda x: x[1])
             charge_idxs = sorted([i for i, _ in sorted_hours[:hours_needed]])
-            # Markera charge och estimated_soc
             current_soc = prev_soc
             charge_prices = []
             for i in range(window_start, window_end+1):
@@ -393,8 +308,7 @@ class HomeBatteryOptimizerCoordinator:
                 self.schedule[i]["window"] = window_counter
                 self.schedule[i]["estimated_soc"] = round(current_soc, 2)
             avg_charge_price = sum(charge_prices) / len(charge_prices) if charge_prices else 0
-            # d) Bygg discharge för window
-            # Starta discharge vid sista timmen i window
+            # d) Bygg discharge för window (alla timmar)
             discharge_soc = self.schedule[window_end]["estimated_soc"] if self.schedule[window_end]["estimated_soc"] is not None else current_soc
             soc_needed_discharge = max(discharge_soc - min_soc, 0)
             hours_needed_discharge = int((soc_needed_discharge + discharge_rate - 1) // discharge_rate)
@@ -404,11 +318,10 @@ class HomeBatteryOptimizerCoordinator:
                 window_counter += 1
                 continue
             lookup = max(0, hours_needed_discharge - 1)
-            idxs = list(range(max(0, window_end - lookup), min(n, window_end + lookup + 1)))
+            idxs = [i for i in range(max(0, window_end - lookup), min(n, window_end + lookup + 1))]
             prices = [(i, self.schedule[i]["price"]) for i in idxs]
             last_price = self.schedule[window_end]["price"]
             max_price = max(prices, key=lambda x: x[1])[1] if prices else last_price
-            # Om någon annan timme har högre pris, flytta window_end till den timmen och upprepa
             while max_price > last_price:
                 max_idx = max(prices, key=lambda x: x[1])[0]
                 window_end = max_idx
@@ -418,29 +331,25 @@ class HomeBatteryOptimizerCoordinator:
                 if hours_needed_discharge < 1:
                     break
                 lookup = max(0, hours_needed_discharge - 1)
-                idxs = list(range(max(0, window_end - lookup), min(n, window_end + lookup + 1)))
+                idxs = [i for i in range(max(0, window_end - lookup), min(n, window_end + lookup + 1))]
                 prices = [(i, self.schedule[i]["price"]) for i in idxs]
                 last_price = self.schedule[window_end]["price"]
                 max_price = max(prices, key=lambda x: x[1])[1] if prices else last_price
-            # Välj de timmar med högst pris, men endast om de uppnår min_profit
             discharge_candidates = [(i, price) for i, price in prices if price >= avg_charge_price + min_profit]
             discharge_candidates.sort(key=lambda x: x[1], reverse=True)
             discharge_idxs = sorted([i for i, _ in discharge_candidates[:hours_needed_discharge]])
-            # Markera discharge och estimated_soc
             current_soc = discharge_soc
             for i in range(n):
                 if i in discharge_idxs and current_soc > min_soc:
                     self.schedule[i]["discharge"] = 1
                     self.schedule[i]["action"] = "discharge"
+                    self.schedule[i]["window"] = window_counter  # Sätt window-index även på discharge-timmar
                     current_soc = max(current_soc - discharge_rate, min_soc)
                 elif self.schedule[i]["window"] == window_counter:
-                    # Sätt charge=0 för timmar som är tomma i window efter discharge start
                     if discharge_idxs and i >= discharge_idxs[0]:
                         self.schedule[i]["charge"] = 0
-                # estimated_soc för discharge
                 if self.schedule[i]["window"] == window_counter:
                     self.schedule[i]["estimated_soc"] = round(current_soc, 2)
-            # Sätt window 2 på första timmen efter att discharge är klar
             if discharge_idxs:
                 prev_discharge_end = discharge_idxs[-1] + 1
                 prev_soc = current_soc
@@ -448,100 +357,7 @@ class HomeBatteryOptimizerCoordinator:
                 prev_discharge_end = window_end + 1
                 prev_soc = current_soc
             window_counter += 1
-        # Sätt window=None och action=idle för timmar utanför alla windows
-        used_windows = set([item["window"] for item in self.schedule if item["window"] is not None])
-        for i, item in enumerate(self.schedule):
-            if item["window"] not in used_windows:
-                item["window"] = None
-                item["action"] = "idle"
         return self.schedule
-
-    async def async_set_charging(self, value: bool):
-        self.charging_on = value
-        # Optionally: Add logic to control hardware or call services
-        _LOGGER.debug(f"Set charging_on to {value}")
-        # Optionally: update state in Home Assistant
-
-    async def async_set_discharging(self, value: bool):
-        self.discharging_on = value
-        # Optionally: Add logic to control hardware or call services
-        _LOGGER.debug(f"Set discharging_on to {value}")
-        # Optionally: update state in Home Assistant
-
-    async def async_set_charge_rate(self, value: float):
-        self.charge_rate = value
-        _LOGGER.debug(f"Set charge_rate to {value}")
-        # Optionally: Add logic to control hardware or call services
-
-    async def async_set_self_usage(self, value: bool):
-        self.self_usage_on = value
-        _LOGGER.debug(f"Self usage set to {self.self_usage_on}")
-        await self.async_update_sensors()
-
-    async def async_toggle_self_usage(self):
-        self.self_usage_on = not self.self_usage_on
-        _LOGGER.debug(f"Self usage toggled to {self.self_usage_on}")
-        await self.async_update_sensors()
-
-    async def async_update_self_usage(self):
-        """Uppdatera self usage state enligt automatik-villkor."""
-        now = datetime.now()
-        # Hämta entity ids
-        battery_power_entity = self.config.get("battery_power_entity")
-        solar_entity = self.config.get("solar_entity")
-        consumption_entity = self.config.get("consumption_entity")
-        # Hämta state
-        battery_power = self.hass.states.get(battery_power_entity)
-        solar = self.hass.states.get(solar_entity)
-        consumption = self.hass.states.get(consumption_entity)
-        try:
-            battery_val = float(battery_power.state) if battery_power and battery_power.state not in (None, "", "unknown", "unavailable") else 0
-        except Exception:
-            battery_val = 0
-        try:
-            solar_val = float(solar.state) if solar and solar.state not in (None, "", "unknown", "unavailable") else 0
-        except Exception:
-            solar_val = 0
-        try:
-            consumption_val = float(consumption.state) if consumption and consumption.state not in (None, "", "unknown", "unavailable") else 0
-        except Exception:
-            consumption_val = 0
-        # Hämta max batteri W från historik (7 dagar) om det behövs
-        if not self._self_usage_max_battery_power or (self._self_usage_last_check is None or (now - self._self_usage_last_check).total_seconds() > 3600):
-            try:
-                history = await self.hass.helpers.history.get_significant_states(
-                    now - timedelta(days=7),
-                    now,
-                    entity_ids=[battery_power_entity],
-                    minimal_response=True
-                )
-                battery_w_values = []
-                for state in history.get(battery_power_entity, []):
-                    try:
-                        val = float(state.state)
-                        if val > 0:
-                            battery_w_values.append(val)
-                    except Exception:
-                        continue
-                if battery_w_values:
-                    self._self_usage_max_battery_power = max(battery_w_values)
-                self._self_usage_last_check = now
-            except Exception:
-                pass
-        # Villkor
-        cond1 = self._self_usage_max_battery_power and battery_val >= 0.75 * self._self_usage_max_battery_power
-        cond2 = solar_val > consumption_val
-        condition_met = cond1 or cond2
-        # Hantera fördröjning
-        if condition_met != self._self_usage_condition_met:
-            self._self_usage_last_change = now
-            self._self_usage_condition_met = condition_met
-        if self._self_usage_last_change:
-            elapsed = (now - self._self_usage_last_change).total_seconds()
-            if self._self_usage_condition_met and not self.self_usage_on and elapsed >= self._self_usage_delay_seconds:
-                self.self_usage_on = True
-            elif not self._self_usage_condition_met and self.self_usage_on and elapsed >= self._self_usage_delay_seconds:
-                self.self_usage_on = False
 
     def update_charge_discharge_periods(self):
         """Hitta och spara alla kommande charge- och discharge-perioder från schemat."""
@@ -593,6 +409,10 @@ class HomeBatteryOptimizerCoordinator:
         soc_update_needed = self.update_soc()
         self.update_price_data()
         _LOGGER.warning(f"[HBO DEBUG] soc={self.soc}, price_data_len={len(self.price_data) if self.price_data else 0}")
+        # Kontroll: Bygg bara schema om både SoC och prisdata är giltiga
+        if self.soc is None or not self.price_data or len(self.price_data) < 1:
+            _LOGGER.warning("[HBO] Skipping schedule build: SoC or price data not available yet.")
+            return
         # Bygg alltid nytt schema enligt stepwise-logik
         self.build_full_schedule()
         _LOGGER.warning(f"[HBO DEBUG] schedule_len={len(self.schedule)}; first={self.schedule[0] if self.schedule else None}")
@@ -601,8 +421,39 @@ class HomeBatteryOptimizerCoordinator:
         self.update_charge_discharge_periods()
         if hasattr(self, 'async_update_listeners'):
             await self.async_update_listeners()
-        # If entities are not using listeners, you may need to call async_write_ha_state on each
-        # This can be handled by the entity base class if using DataUpdateCoordinator pattern
+        # Skicka notifikation till Home Assistant UI
+        await self._send_schedule_notification()
+
+    async def _send_schedule_notification(self):
+        """Skicka en notifikation med hela schemat till Home Assistant UI."""
+        if not self.schedule:
+            return
+        # Bygg tabell som text
+        header = f"| Start | End | Action | Price | Estimated SoC | Charge | Discharge | Window |\n|---|---|---|---|---|---|---|---|"
+        rows = []
+        for entry in self.schedule:
+            rows.append(f"| {entry.get('start','')} | {entry.get('end','')} | {entry.get('action','')} | {entry.get('price','')} | {entry.get('estimated_soc','')} | {entry.get('charge','')} | {entry.get('discharge','')} | {entry.get('window','')} |")
+        table = header + "\n" + "\n".join(rows)
+        # Lägg till felsökningsinfo
+        debug_info = f"\n\n**[DEBUG] min_profit:** {getattr(self, 'min_profit', None)}\n"
+        debug_info += f"**[DEBUG] SoC:** {getattr(self, 'soc', None)}\n"
+        debug_info += f"**[DEBUG] Price data:** {[e['value'] for e in self.price_data]}\n"
+        debug_info += f"**[DEBUG] Windows:** {getattr(self, 'charge_windows', None)}\n"
+        debug_info += f"**[DEBUG] Now:** {datetime.now().isoformat()}\n"
+        message = f"**Batterischema uppdaterat**\n\n{table}{debug_info}"
+        try:
+            await self.hass.services.async_call(
+                "persistent_notification",
+                "create",
+                {
+                    "title": "Home Battery Optimizer",
+                    "message": message,
+                    "notification_id": "hbo_schedule_update"
+                },
+                blocking=True
+            )
+        except Exception as e:
+            _LOGGER.error(f"Kunde inte skicka notifikation: {e}")
 
     def add_update_callback(self, callback):
         self._entity_update_callbacks.add(callback)
@@ -881,3 +732,92 @@ class HomeBatteryOptimizerCoordinator:
                     if f"charge_window_{n}" in self.schedule[j]:
                         self.schedule[j][f"charge_window_{n}"] = 0
         return True
+
+    async def async_set_charging(self, value: bool):
+        self.charging_on = value
+        # Optionally: Add logic to control hardware or call services
+        _LOGGER.debug(f"Set charging_on to {value}")
+        # Optionally: update state in Home Assistant
+
+    async def async_set_discharging(self, value: bool):
+        self.discharging_on = value
+        # Optionally: Add logic to control hardware or call services
+        _LOGGER.debug(f"Set discharging_on to {value}")
+        # Optionally: update state in Home Assistant
+
+    async def async_set_charge_rate(self, value: float):
+        self.charge_rate = value
+        _LOGGER.debug(f"Set charge_rate to {value}")
+        # Optionally: Add logic to control hardware or call services
+
+    async def async_set_self_usage(self, value: bool):
+        self.self_usage_on = value
+        _LOGGER.debug(f"Self usage set to {self.self_usage_on}")
+        await self.async_update_sensors()
+
+    async def async_toggle_self_usage(self):
+        self.self_usage_on = not self.self_usage_on
+        _LOGGER.debug(f"Self usage toggled to {self.self_usage_on}")
+        await self.async_update_sensors()
+
+    async def async_update_self_usage(self):
+        """Uppdatera self usage state enligt automatik-villkor."""
+        now = datetime.now()
+        # Hämta entity ids
+        battery_power_entity = self.config.get("battery_power_entity")
+        solar_entity = self.config.get("solar_entity")
+        consumption_entity = self.config.get("consumption_entity")
+        # Hämta state
+        battery_power = self.hass.states.get(battery_power_entity)
+        solar = self.hass.states.get(solar_entity)
+        consumption = self.hass.states.get(consumption_entity)
+        try:
+            battery_val = float(battery_power.state) if battery_power and battery_power.state not in (None, "", "unknown", "unavailable") else 0
+        except Exception:
+            battery_val = 0
+        try:
+            solar_val = float(solar.state) if solar and solar.state not in (None, "", "unknown", "unavailable") else 0
+        except Exception:
+            solar_val = 0
+        try:
+            consumption_val = float(consumption.state) if consumption and consumption.state not in (None, "", "unknown", "unavailable") else 0
+        except Exception:
+            consumption_val = 0
+        # Hämta max batteri W från historik (7 dagar) om det behövs
+        if not self._self_usage_max_battery_power or (self._self_usage_last_check is None or (now - self._self_usage_last_check).total_seconds() > 3600):
+            try:
+                history = await self.hass.helpers.history.get_significant_states(
+                    now - timedelta(days=7),
+                    now,
+                    entity_ids=[battery_power_entity],
+                    minimal_response=True
+                )
+                battery_w_values = []
+                for state in history.get(battery_power_entity, []):
+                    try:
+                        val = float(state.state)
+                        if val > 0:
+                            battery_w_values.append(val)
+                    except Exception:
+                        continue
+                if battery_w_values:
+                    self._self_usage_max_battery_power = max(battery_w_values)
+                self._self_usage_last_check = now
+            except Exception:
+                pass
+        # Villkor
+        cond1 = self._self_usage_max_battery_power and battery_val >= 0.75 * self._self_usage_max_battery_power
+        cond2 = solar_val > consumption_val
+        condition_met = cond1 or cond2
+        # Hantera fördröjning
+        if condition_met != self._self_usage_condition_met:
+            self._self_usage_last_change = now
+            self._self_usage_condition_met = condition_met
+        if self._self_usage_last_change:
+            elapsed = (now - self._self_usage_last_change).total_seconds()
+            if self._self_usage_condition_met and not self.self_usage_on and elapsed >= self._self_usage_delay_seconds:
+                self.self_usage_on = True
+            elif not self._self_usage_condition_met and self.self_usage_on and elapsed >= self._self_usage_delay_seconds:
+                self.self_usage_on = False
+
+    __all__ = ["HomeBatteryOptimizerCoordinator"]
