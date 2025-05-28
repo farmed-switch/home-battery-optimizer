@@ -362,6 +362,13 @@ class HomeBatteryOptimizerCoordinator:
                 prev_discharge_end = window_end + 1
                 prev_soc = current_soc
             window_counter += 1
+        # Efter att hela schemat är byggt: fyll i alla None-värden för estimated_soc
+        last_soc = None
+        for entry in self.schedule:
+            if entry["estimated_soc"] is not None:
+                last_soc = entry["estimated_soc"]
+            else:
+                entry["estimated_soc"] = last_soc
         return self.schedule
 
     def update_charge_discharge_periods(self):
