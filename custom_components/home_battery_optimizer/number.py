@@ -75,32 +75,36 @@ class BatteryOptimizerNumber(HBOEntity, NumberEntity):
 
     async def async_set_native_value(self, value):
         key = self._key
+        # 1. Uppdatera self.config
+        self.coordinator.config[key] = value
+        # 2. Spara till entry.options (persistent lagring)
+        hass = self.coordinator.hass
+        entry = self.config_entry
+        # Skapa ny options-dict med uppdaterat värde
+        new_options = dict(entry.options)
+        new_options[key] = value
+        await hass.config_entries.async_update_entry(entry, options=new_options)
+        # 3. Uppdatera coordinator-attribut
         if key == "charge_rate":
             self.coordinator.charge_rate = value
-            # Kör full schemaberäkning när laddhastighet ändras
             if hasattr(self.coordinator, 'async_update_sensors'):
                 await self.coordinator.async_update_sensors()
         elif key == "discharge_rate":
             self.coordinator.discharge_rate = value
-            # Kör full schemaberäkning när urladdningshastighet ändras
             if hasattr(self.coordinator, 'async_update_sensors'):
                 await self.coordinator.async_update_sensors()
         elif key == "max_battery_soc":
             self.coordinator.max_battery_soc = value
-            # Kör full schemaberäkning när max SoC ändras
             if hasattr(self.coordinator, 'async_update_sensors'):
                 await self.coordinator.async_update_sensors()
         elif key == "min_battery_soc":
             self.coordinator.min_battery_soc = value
-            # Kör full schemaberäkning när min SoC ändras
             if hasattr(self.coordinator, 'async_update_sensors'):
                 await self.coordinator.async_update_sensors()
         elif key == "min_profit":
             self.coordinator.min_profit = value
-            # Kör full schemaberäkning när min_profit ändras
             if hasattr(self.coordinator, 'async_update_sensors'):
                 await self.coordinator.async_update_sensors()
         self.async_write_ha_state()
-        # Notify all listeners (e.g. sensors) to update their state
         if hasattr(self.coordinator, 'async_update_listeners'):
             await self.coordinator.async_update_listeners()

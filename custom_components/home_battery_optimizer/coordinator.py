@@ -19,11 +19,13 @@ class HomeBatteryOptimizerCoordinator:
         self.status_attributes = {}
         self.charging_on = False
         self.discharging_on = False
-        self.charge_rate = 25
-        self.discharge_rate = 25
-        self.max_battery_soc = 100
-        self.min_battery_soc = 0
-        self.self_usage_on = False
+        # Sätt runtime-attribut från self.config om de finns, annars default
+        self.charge_rate = float(config.get("charge_rate", 25))
+        self.discharge_rate = float(config.get("discharge_rate", 25))
+        self.max_battery_soc = float(config.get("max_battery_soc", 100))
+        self.min_battery_soc = float(config.get("min_battery_soc", 0))
+        self.min_profit = float(config.get("min_profit", 10))
+        self.self_usage_on = bool(config.get("self_usage_on", False))
         self._self_usage_last_change = None
         self._self_usage_condition_met = False
         self._self_usage_last_check = None
@@ -37,7 +39,6 @@ class HomeBatteryOptimizerCoordinator:
         }
         self.charge_periods = []  # Lista av dictar med kommande charge-perioder
         self.discharge_periods = []  # Lista av dictar med kommande discharge-perioder
-        self.min_profit = 10  # Minimum profit threshold, default 10
         self._entity_update_callbacks = set()
 
     @property
