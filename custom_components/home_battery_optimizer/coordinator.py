@@ -339,19 +339,24 @@ class HomeBatteryOptimizerCoordinator:
             discharge_candidates.sort(key=lambda x: x[1], reverse=True)
             discharge_idxs = sorted([i for i, _ in discharge_candidates[:hours_needed_discharge]])
             current_soc = discharge_soc
-            for i in range(n):
-                if i in discharge_idxs and current_soc > min_soc:
+            # NY LOGIK: Fyll i alla timmar mellan första och sista discharge-timmen
+            if discharge_idxs:
+                discharge_start = discharge_idxs[0]
+                discharge_end = discharge_idxs[-1]
+                for i in range(discharge_start, discharge_end + 1):
                     self.schedule[i]["discharge"] = 1
                     self.schedule[i]["action"] = "discharge"
-                    self.schedule[i]["window"] = window_counter  # Sätt window-index även på discharge-timmar
-                    current_soc = max(current_soc - discharge_rate, min_soc)
-                elif self.schedule[i]["window"] == window_counter:
-                    if discharge_idxs and i >= discharge_idxs[0]:
-                        self.schedule[i]["charge"] = 0
-                if self.schedule[i]["window"] == window_counter:
+                    self.schedule[i]["window"] = window_counter
+                    self.schedule[i]["charge"] = 0  # Ta bort eventuell laddning
                     self.schedule[i]["estimated_soc"] = round(current_soc, 2)
+                    current_soc = max(current_soc - discharge_rate, min_soc)
+                # Fyll i tomma window-index mellan prev_discharge_end och discharge_end
+                for i in range(prev_discharge_end, discharge_end + 1):
+                    if self.schedule[i]["window"] is None:
+                        self.schedule[i]["window"] = window_counter
+            # Om du vill nollställa charge på övriga timmar i window efter discharge_start, kan du lägga till det här
             if discharge_idxs:
-                prev_discharge_end = discharge_idxs[-1] + 1
+                prev_discharge_end = discharge_end + 1
                 prev_soc = current_soc
             else:
                 prev_discharge_end = window_end + 1

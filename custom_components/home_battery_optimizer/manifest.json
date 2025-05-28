@@ -1,7 +1,7 @@
 {
   "domain": "home_battery_optimizer",
   "name": "Home Battery Optimizer",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "config_flow": true,
   "documentation": "https://github.com/farmed-switch/home-battery-optimizer#readme",
   "requirements": [],
