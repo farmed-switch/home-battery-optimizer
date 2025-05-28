@@ -439,8 +439,7 @@ class HomeBatteryOptimizerCoordinator:
 
     async def _send_schedule_notification(self):
         """Skicka en notifikation med hela schemat till Home Assistant UI."""
-        if not self.schedule:
-            return
+        return  # Notifiering inaktiverad
         # Bygg tabell som text
         header = f"| Start | End | Action | Price | Estimated SoC | Charge | Discharge | Window |\n|---|---|---|---|---|---|---|---|"
         rows = []

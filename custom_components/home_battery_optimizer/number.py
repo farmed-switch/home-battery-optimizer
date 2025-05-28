@@ -83,7 +83,7 @@ class BatteryOptimizerNumber(HBOEntity, NumberEntity):
         # Skapa ny options-dict med uppdaterat värde
         new_options = dict(entry.options)
         new_options[key] = value
-        await hass.config_entries.async_update_entry(entry, options=new_options)
+        hass.config_entries.async_update_entry(entry, options=new_options)
         # 3. Uppdatera coordinator-attribut
         if key == "charge_rate":
             self.coordinator.charge_rate = value
