@@ -16,7 +16,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Kombinera entry.data och entry.options (options har företräde)
     config = dict(entry.data)
     config.update(entry.options)
-    coordinator = HomeBatteryOptimizerCoordinator(hass, config)
+    coordinator = HomeBatteryOptimizerCoordinator(hass, config, entry)  # Skicka med entry
     # Bygg schema första gången med alla passed=False
     coordinator.build_full_schedule(force_all_unpassed=True)
     hass.data[DOMAIN][entry.entry_id] = coordinator

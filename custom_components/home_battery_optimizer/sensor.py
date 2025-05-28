@@ -19,14 +19,14 @@ class HBOScheduleSensor(HBOEntity, SensorEntity):
 
     @property
     def state(self):
-        # Status: Charging, Discharging, eller Idle/Self use med SoC
+        # Status: Charging, Discharging, Idle eller Self use (live, ej schedule)
         schedule = getattr(self.coordinator, 'schedule', [])
         if not schedule:
             _LOGGER.warning("[HBO] Battery Schedule sensor: schedule is empty or unavailable!")
             return "unavailable"
         now = self.coordinator.hass.now() if hasattr(self.coordinator.hass, 'now') else datetime.now()
-        soc = self.coordinator.soc if hasattr(self.coordinator, 'soc') else None
-        self_usage = getattr(self.coordinator, 'self_usage_on', False)
+        # Ny live self use-status
+        self_use_active = getattr(self.coordinator, '_self_use_active', False)
         for entry in schedule:
             start = entry.get("start")
             end = entry.get("end")
@@ -39,15 +39,15 @@ class HBOScheduleSensor(HBOEntity, SensorEntity):
                             return "Charging"
                         if entry.get("discharge", 0) == 1:
                             return "Discharging"
-                        if self_usage:
-                            return f"Self use, SoC: {soc}%" if soc is not None else "Self use"
-                        return f"Idle, SoC: {soc}%" if soc is not None else "Idle"
+                        if self_use_active:
+                            return "Self use"
+                        return "Idle"
                 except Exception:
                     continue
-        # Om ingen match, visa idle
-        if self_usage:
-            return f"Self use, SoC: {soc}%" if soc is not None else "Self use"
-        return f"Idle, SoC: {soc}%" if soc is not None else "Idle"
+        # Om ingen match, visa idle eller self use live
+        if self_use_active:
+            return "Self use"
+        return "Idle"
 
     def _get_status(self):
         # Returnera nuvarande action och window

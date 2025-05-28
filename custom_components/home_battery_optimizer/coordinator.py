@@ -6,9 +6,10 @@ DOMAIN = "home_battery_optimizer"
 _LOGGER = logging.getLogger(__name__)
 
 class HomeBatteryOptimizerCoordinator:
-    def __init__(self, hass, config):
+    def __init__(self, hass, config, config_entry=None):
         self.hass = hass
         self.config = config
+        self.config_entry = config_entry  # Spara entry för persistence
         self.schedule = []
         self.soc = None
         self.current_power = None
@@ -17,15 +18,16 @@ class HomeBatteryOptimizerCoordinator:
         self.price_data = None
         self.max_charge_windows = 3  # Default, can be set 1-5
         self.status_attributes = {}
-        self.charging_on = False
-        self.discharging_on = False
-        # Sätt runtime-attribut från self.config om de finns, annars default
+        # Läs persistent state från config (entry.options)
+        self.charging_on = bool(config.get("charging_on", False))
+        self.discharging_on = bool(config.get("discharging_on", False))
+        self.self_usage_on = bool(config.get("self_usage_on", False))
+        # Läs number-entity-värden från config (entry.options)
         self.charge_rate = float(config.get("charge_rate", 25))
         self.discharge_rate = float(config.get("discharge_rate", 25))
         self.max_battery_soc = float(config.get("max_battery_soc", 100))
         self.min_battery_soc = float(config.get("min_battery_soc", 0))
         self.min_profit = float(config.get("min_profit", 10))
-        self.self_usage_on = bool(config.get("self_usage_on", False))
         self._self_usage_last_change = None
         self._self_usage_condition_met = False
         self._self_usage_last_check = None
@@ -370,6 +372,21 @@ class HomeBatteryOptimizerCoordinator:
                 last_soc = entry["estimated_soc"]
             else:
                 entry["estimated_soc"] = last_soc
+        # Avbryt pågående och framtida charge/discharge i schemat om respektive switch är OFF, men lämna passerade timmar orörda.
+        for idx, entry in enumerate(self.schedule):
+            # Om timmen är passerad, låt den vara
+            if entry["passed"]:
+                continue
+            # Om charging är avstängd, nollställ charge och action för framtida timmar
+            if not self.charging_on and entry["charge"] == 1:
+                entry["charge"] = 0
+                if entry["action"] == "charge":
+                    entry["action"] = "idle"
+            # Om discharging är avstängd, nollställ discharge och action för framtida timmar
+            if not self.discharging_on and entry["discharge"] == 1:
+                entry["discharge"] = 0
+                if entry["action"] == "discharge":
+                    entry["action"] = "idle"
         return self.schedule
 
     def update_charge_discharge_periods(self):
@@ -429,8 +446,8 @@ class HomeBatteryOptimizerCoordinator:
         # Bygg alltid nytt schema enligt stepwise-logik
         self.build_full_schedule()
         _LOGGER.warning(f"[HBO DEBUG] schedule_len={len(self.schedule)}; first={self.schedule[0] if self.schedule else None}")
-        # Self use-logik ska alltid uppdateras
-        await self.async_update_self_usage()
+        # Self use-logik körs separat
+        await self.self_use_automation()
         self.update_charge_discharge_periods()
         if hasattr(self, 'async_update_listeners'):
             await self.async_update_listeners()
@@ -747,23 +764,34 @@ class HomeBatteryOptimizerCoordinator:
 
     async def async_set_charging(self, value: bool):
         self.charging_on = value
-        # Optionally: Add logic to control hardware or call services
+        # Spara till entry.options (persistent lagring)
+        entry = self.config_entry
+        if entry is not None:
+            new_options = dict(entry.options)
+            new_options['charging_on'] = value
+            self.hass.config_entries.async_update_entry(entry, options=new_options)
         _LOGGER.debug(f"Set charging_on to {value}")
-        # Optionally: update state in Home Assistant
+        await self.async_update_sensors()
 
     async def async_set_discharging(self, value: bool):
         self.discharging_on = value
-        # Optionally: Add logic to control hardware or call services
+        # Spara till entry.options (persistent lagring)
+        entry = self.config_entry
+        if entry is not None:
+            new_options = dict(entry.options)
+            new_options['discharging_on'] = value
+            self.hass.config_entries.async_update_entry(entry, options=new_options)
         _LOGGER.debug(f"Set discharging_on to {value}")
-        # Optionally: update state in Home Assistant
-
-    async def async_set_charge_rate(self, value: float):
-        self.charge_rate = value
-        _LOGGER.debug(f"Set charge_rate to {value}")
-        # Optionally: Add logic to control hardware or call services
+        await self.async_update_sensors()
 
     async def async_set_self_usage(self, value: bool):
         self.self_usage_on = value
+        # Spara till entry.options (persistent lagring)
+        entry = self.config_entry
+        if entry is not None:
+            new_options = dict(entry.options)
+            new_options['self_usage_on'] = value
+            self.hass.config_entries.async_update_entry(entry, options=new_options)
         _LOGGER.debug(f"Self usage set to {self.self_usage_on}")
         await self.async_update_sensors()
 
@@ -772,21 +800,43 @@ class HomeBatteryOptimizerCoordinator:
         _LOGGER.debug(f"Self usage toggled to {self.self_usage_on}")
         await self.async_update_sensors()
 
-    async def async_update_self_usage(self):
-        """Uppdatera self usage state enligt automatik-villkor."""
+    async def self_use_automation(self):
+        """
+        Self use får endast vara aktivt när vi är i idle enligt schemat.
+        Aktiveras om solel > konsumtion i 2 mätningar (2 min i rad), avaktiveras om solel <= konsumtion i 2 mätningar och SoC < 95% av max.
+        Om self use-switchen är OFF är automationen helt avstängd.
+        """
+        # Om self use-switchen är OFF, stäng av self use och returnera
+        if not self.self_usage_on:
+            if getattr(self, '_self_use_active', False):
+                self._self_use_active = False
+                self.async_write_ha_state_all()
+            return
+        # Kontrollera att vi är i idle enligt schemat
         now = datetime.now()
-        # Hämta entity ids
-        battery_power_entity = self.config.get("battery_power_entity")
+        in_idle = False
+        for entry in self.schedule:
+            start = entry.get("start")
+            end = entry.get("end")
+            if start and end:
+                try:
+                    start_dt = datetime.fromisoformat(start)
+                    end_dt = datetime.fromisoformat(end)
+                    if start_dt <= now < end_dt and entry.get("action") == "idle":
+                        in_idle = True
+                        break
+                except Exception:
+                    continue
+        if not in_idle:
+            if getattr(self, '_self_use_active', False):
+                self._self_use_active = False
+                self.async_write_ha_state_all()
+            return
+        # Hämta sol och konsumtion
         solar_entity = self.config.get("solar_entity")
         consumption_entity = self.config.get("consumption_entity")
-        # Hämta state
-        battery_power = self.hass.states.get(battery_power_entity)
         solar = self.hass.states.get(solar_entity)
         consumption = self.hass.states.get(consumption_entity)
-        try:
-            battery_val = float(battery_power.state) if battery_power and battery_power.state not in (None, "", "unknown", "unavailable") else 0
-        except Exception:
-            battery_val = 0
         try:
             solar_val = float(solar.state) if solar and solar.state not in (None, "", "unknown", "unavailable") else 0
         except Exception:
@@ -795,41 +845,36 @@ class HomeBatteryOptimizerCoordinator:
             consumption_val = float(consumption.state) if consumption and consumption.state not in (None, "", "unknown", "unavailable") else 0
         except Exception:
             consumption_val = 0
-        # Hämta max batteri W från historik (7 dagar) om det behövs
-        if not self._self_usage_max_battery_power or (self._self_usage_last_check is None or (now - self._self_usage_last_check).total_seconds() > 3600):
-            try:
-                history = await self.hass.helpers.history.get_significant_states(
-                    now - timedelta(days=7),
-                    now,
-                    entity_ids=[battery_power_entity],
-                    minimal_response=True
-                )
-                battery_w_values = []
-                for state in history.get(battery_power_entity, []):
-                    try:
-                        val = float(state.state)
-                        if val > 0:
-                            battery_w_values.append(val)
-                    except Exception:
-                        continue
-                if battery_w_values:
-                    self._self_usage_max_battery_power = max(battery_w_values)
-                self._self_usage_last_check = now
-            except Exception:
-                pass
-        # Villkor
-        cond1 = self._self_usage_max_battery_power and battery_val >= 0.75 * self._self_usage_max_battery_power
-        cond2 = solar_val > consumption_val
-        condition_met = cond1 or cond2
-        # Hantera fördröjning
-        if condition_met != self._self_usage_condition_met:
-            self._self_usage_last_change = now
-            self._self_usage_condition_met = condition_met
-        if self._self_usage_last_change:
-            elapsed = (now - self._self_usage_last_change).total_seconds()
-            if self._self_usage_condition_met and not self.self_usage_on and elapsed >= self._self_usage_delay_seconds:
-                self.self_usage_on = True
-            elif not self._self_usage_condition_met and self.self_usage_on and elapsed >= self._self_usage_delay_seconds:
-                self.self_usage_on = False
+        # Historik för 2 senaste mätningar
+        if not hasattr(self, '_self_use_history'):
+            self._self_use_history = []
+        self._self_use_history.append(solar_val > consumption_val)
+        if len(self._self_use_history) > 2:
+            self._self_use_history.pop(0)
+        # Aktivera self use om 2 i rad är True
+        if self._self_use_history == [True, True]:
+            if not getattr(self, '_self_use_active', False):
+                self._self_use_active = True
+                self.async_write_ha_state_all()
+            return
+        # Avaktivera self use om 2 i rad är False och SoC < 95% av max
+        soc = self.soc if self.soc is not None else 0
+        max_soc = self.max_battery_soc if hasattr(self, 'max_battery_soc') else 100
+        if self._self_use_history == [False, False] and soc < 0.95 * max_soc:
+            if getattr(self, '_self_use_active', False):
+                self._self_use_active = False
+                self.async_write_ha_state_all()
+
+    def async_write_ha_state_all(self):
+        # Uppdatera alla entiteter (framförallt sensorn) så att self use-status syns live
+        for callback in list(self._entity_update_callbacks):
+            if callable(callback):
+                try:
+                    result = callback()
+                    if hasattr(result, "__await__"):
+                        import asyncio
+                        asyncio.create_task(result)
+                except Exception as e:
+                    _LOGGER.error(f"Error in entity update callback: {e}")
 
     __all__ = ["HomeBatteryOptimizerCoordinator"]
