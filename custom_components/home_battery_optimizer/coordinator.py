@@ -860,7 +860,7 @@ class HomeBatteryOptimizerCoordinator:
         # Avaktivera self use om 2 i rad är False och SoC < 95% av max
         soc = self.soc if self.soc is not None else 0
         max_soc = self.max_battery_soc if hasattr(self, 'max_battery_soc') else 100
-        if self._self_use_history == [False, False] and soc < 0.95 * max_soc:
+        if self._self_use_history == [False, False] and soc < 0.97 * max_soc:
             if getattr(self, '_self_use_active', False):
                 self._self_use_active = False
                 self.async_write_ha_state_all()
