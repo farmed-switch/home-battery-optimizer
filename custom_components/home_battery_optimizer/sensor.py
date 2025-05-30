@@ -19,28 +19,18 @@ class HBOScheduleSensor(HBOEntity, SensorEntity):
 
     @property
     def state(self):
-        # Status, t.ex. "idle (2), SoC: 100.0%"
-        soc = self.coordinator.soc if hasattr(self.coordinator, 'soc') else None
-        status = self._get_status()
-        if soc is not None:
-            return f"{status}, SoC: {soc}%"
-        return status
-
-    def _get_status(self):
-        # Returnera nuvarande action och window
+        # Returnera endast action ("idle", "charge", "discharge")
         schedule = getattr(self.coordinator, 'schedule', [])
         now = self.coordinator.hass.now() if hasattr(self.coordinator.hass, 'now') else datetime.now()
         for entry in schedule:
             start = entry.get("start")
             end = entry.get("end")
-            window = entry.get("window")
             if start and end:
                 try:
                     start_dt = datetime.fromisoformat(start)
                     end_dt = datetime.fromisoformat(end)
                     if start_dt <= now < end_dt:
-                        action = entry.get("action", "idle")
-                        return f"{action} ({window})"
+                        return entry.get("action", "idle")
                 except Exception:
                     continue
         return "idle"
@@ -95,7 +85,7 @@ class HBOScheduleSensor(HBOEntity, SensorEntity):
                 "end": entry.get("end"),
                 "action": entry.get("action"),
                 "price": entry.get("price"),
-                "soc": entry.get("soc"),
+                "soc": entry.get("estimated_soc"),  # Korrigera till estimated_soc
                 "charge": entry.get("charge"),
                 "discharge": entry.get("discharge"),
                 "window": entry.get("window")

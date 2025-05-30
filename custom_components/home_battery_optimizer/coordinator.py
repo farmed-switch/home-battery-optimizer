@@ -293,6 +293,9 @@ class HomeBatteryOptimizerCoordinator:
             # c) Planera laddning i window (alla timmar)
             soc_needed = max(0, max_soc - prev_soc)
             hours_needed = int((soc_needed + charge_rate - 1) // charge_rate)
+            # NYTT: Om batteriet är fullt, planera ingen laddning
+            if prev_soc >= max_soc - 0.1:
+                hours_needed = 0
             if soc_needed < 5:
                 hours_needed = 0
             window_prices = [(i, self.schedule[i]["price"]) for i in range(window_start, window_end+1)]
