@@ -293,9 +293,6 @@ class HomeBatteryOptimizerCoordinator:
             # c) Planera laddning i window (alla timmar)
             soc_needed = max(0, max_soc - prev_soc)
             hours_needed = int((soc_needed + charge_rate - 1) // charge_rate)
-            # NYTT: Om batteriet är fullt, planera ingen laddning
-            if prev_soc >= max_soc - 0.1:
-                hours_needed = 0
             if soc_needed < 5:
                 hours_needed = 0
             window_prices = [(i, self.schedule[i]["price"]) for i in range(window_start, window_end+1)]
@@ -806,8 +803,10 @@ class HomeBatteryOptimizerCoordinator:
     async def self_use_automation(self):
         """
         Self use får endast vara aktivt när vi är i idle enligt schemat.
-        Aktiveras om solel > konsumtion i 2 mätningar (2 min i rad), avaktiveras om solel <= konsumtion i 2 mätningar och SoC < 95% av max.
         Om self use-switchen är OFF är automationen helt avstängd.
+        Om nästa schemalagda action efter nu är charge eller discharge (oavsett ordning), använd Alt 2-logik:
+        self use är aktiv om solel > 20W i 2 mätningar i rad.
+        Annars: default (solel > konsumtion i 2 mätningar).
         """
         # Om self use-switchen är OFF, stäng av self use och returnera
         if not self.self_usage_on:
@@ -818,7 +817,8 @@ class HomeBatteryOptimizerCoordinator:
         # Kontrollera att vi är i idle enligt schemat
         now = datetime.now()
         in_idle = False
-        for entry in self.schedule:
+        current_idx = None
+        for idx, entry in enumerate(self.schedule):
             start = entry.get("start")
             end = entry.get("end")
             if start and end:
@@ -827,6 +827,7 @@ class HomeBatteryOptimizerCoordinator:
                     end_dt = datetime.fromisoformat(end)
                     if start_dt <= now < end_dt and entry.get("action") == "idle":
                         in_idle = True
+                        current_idx = idx
                         break
                 except Exception:
                     continue
@@ -835,6 +836,17 @@ class HomeBatteryOptimizerCoordinator:
                 self._self_use_active = False
                 self.async_write_ha_state_all()
             return
+        # Dynamiskt: Finns charge eller discharge först efter nu?
+        next_action = None
+        next_action_idx = None
+        if current_idx is not None:
+            for idx in range(current_idx+1, len(self.schedule)):
+                action = self.schedule[idx].get("action")
+                if action in ("charge", "discharge"):
+                    next_action = action
+                    next_action_idx = idx
+                    break
+        use_alt2 = next_action in ("charge", "discharge")
         # Hämta sol och konsumtion
         solar_entity = self.config.get("solar_entity")
         consumption_entity = self.config.get("consumption_entity")
@@ -851,7 +863,11 @@ class HomeBatteryOptimizerCoordinator:
         # Historik för 2 senaste mätningar
         if not hasattr(self, '_self_use_history'):
             self._self_use_history = []
-        self._self_use_history.append(solar_val > consumption_val)
+        # --- Alternativ 2: sol > 20W i 2 mätningar ---
+        if use_alt2:
+            self._self_use_history.append(solar_val > 20)
+        else:
+            self._self_use_history.append(solar_val > consumption_val)
         if len(self._self_use_history) > 2:
             self._self_use_history.pop(0)
         # Aktivera self use om 2 i rad är True
@@ -860,13 +876,15 @@ class HomeBatteryOptimizerCoordinator:
                 self._self_use_active = True
                 self.async_write_ha_state_all()
             return
-        # Avaktivera self use om 2 i rad är False och SoC < 95% av max
+        # Avaktivera self use om 2 i rad är False och SoC < 97% av max
         soc = self.soc if self.soc is not None else 0
         max_soc = self.max_battery_soc if hasattr(self, 'max_battery_soc') else 100
         if self._self_use_history == [False, False] and soc < 0.97 * max_soc:
             if getattr(self, '_self_use_active', False):
                 self._self_use_active = False
                 self.async_write_ha_state_all()
+        # --- END dynamisk self use-logik ---
+        return
 
     def async_write_ha_state_all(self):
         # Uppdatera alla entiteter (framförallt sensorn) så att self use-status syns live
